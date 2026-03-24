@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.14
+-- TwAuras file version: 0.1.15
 -- Addon bootstrap, defaults, and frame event wiring.
 local addonName = "TwAuras"
 
@@ -20,6 +20,7 @@ TwAuras = {
     pendingDebuffCasts = {},
     targetHealthEstimates = {},
     targetManaEstimates = {},
+    auraAudio = {},
     lastPlayerComboPoints = 0,
     playerCast = {},
   },
@@ -301,5 +302,6 @@ TwAuras.frame:SetScript("OnUpdate", function()
     TwAuras.lastUpdate = now
     TwAuras:RefreshDynamicTexts(now)
     TwAuras:RefreshTimedAuras()
+    TwAuras:UpdateAuraLoopSounds(now)
   end
 end)

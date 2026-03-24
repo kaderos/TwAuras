@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.17
+-- TwAuras file version: 0.1.19
 -- Shared table helpers keep saved variables compatible as defaults evolve.
 local function CopyDefaults(src, dst)
   if type(src) ~= "table" then
@@ -285,6 +285,15 @@ function TwAuras:CreateDefaultCondition()
     glowColor = {1, 0.82, 0, 1},
     useDesaturate = false,
     desaturate = false,
+  }
+end
+
+function TwAuras:CreateDefaultSoundActions()
+  return {
+    startSound = "",
+    activeSound = "",
+    activeInterval = 2,
+    stopSound = "",
   }
 end
 
@@ -582,6 +591,7 @@ function TwAuras:NormalizeAuraConfig(aura)
   aura.display = CopyDefaults(self:GetDefaultAuraTemplate().display, aura.display or {})
   aura.load = CopyDefaults(self:GetDefaultAuraTemplate().load, aura.load or {})
   aura.position = CopyDefaults(self:GetDefaultAuraTemplate().position, aura.position or {})
+  aura.soundActions = CopyDefaults(self:CreateDefaultSoundActions(), aura.soundActions or {})
   aura.conditions = aura.conditions or {}
   aura.load.updateEvents = aura.load.updateEvents or ""
   aura.display.width = tonumber(aura.display.width) or 36
@@ -742,6 +752,13 @@ function TwAuras:NormalizeAuraConfig(aura)
   aura.display.timerAnchor = string.upper(aura.display.timerAnchor or "TOP")
   aura.display.valueAnchor = string.upper(aura.display.valueAnchor or "RIGHT")
   aura.display.textAnchor = string.upper(aura.display.textAnchor or "CENTER")
+  aura.soundActions.startSound = aura.soundActions.startSound or ""
+  aura.soundActions.activeSound = aura.soundActions.activeSound or ""
+  aura.soundActions.stopSound = aura.soundActions.stopSound or ""
+  aura.soundActions.activeInterval = tonumber(aura.soundActions.activeInterval) or 2
+  if aura.soundActions.activeInterval < 0.2 then
+    aura.soundActions.activeInterval = 0.2
+  end
 end
 
 -- Trigger handlers can return sparse data; the core fills the common state shape.
@@ -1499,6 +1516,7 @@ function TwAuras:StopAuraTimersForAura(aura)
   for i = 1, table.getn(aura.triggers) do
     self:StopAuraTimer(self:GetTriggerRuntimeKey(aura, aura.triggers[i]))
   end
+  self:ClearAuraAudioState(aura)
 end
 
 -- Vanilla APIs do not expose aura names directly, so the tooltip becomes the source of truth.
@@ -1557,6 +1575,7 @@ function TwAuras:RefreshAura(aura)
 
   local state = self:EvaluateTrigger(aura)
   aura.__state = self:ResolveConditionalState(aura, self:NormalizeState(aura, state))
+  self:HandleAuraSoundState(aura, aura.__state)
 
   if aura.__state and aura.__state.active then
     region:ApplyState(aura, aura.__state)
@@ -1591,6 +1610,88 @@ function TwAuras:RefreshTimedAuras()
     local aura = auras[i]
     if aura.__state and aura.__state.active and aura.__state.expirationTime then
       self:RefreshAura(aura)
+    end
+  end
+end
+
+function TwAuras:GetAuraAudioState(aura)
+  if not aura or not aura.id then
+    return {}
+  end
+  self.runtime.auraAudio = self.runtime.auraAudio or {}
+  if not self.runtime.auraAudio[aura.id] then
+    self.runtime.auraAudio[aura.id] = {
+      wasActive = false,
+      nextActiveAt = 0,
+    }
+  end
+  return self.runtime.auraAudio[aura.id]
+end
+
+function TwAuras:ClearAuraAudioState(aura)
+  if not aura or not aura.id then
+    return
+  end
+  self.runtime.auraAudio = self.runtime.auraAudio or {}
+  self.runtime.auraAudio[aura.id] = nil
+end
+
+function TwAuras:PlayConfiguredSound(soundValue)
+  local value = soundValue or ""
+  if value == "" then
+    return false
+  end
+  if tonumber(value) and PlaySound then
+    PlaySound(tonumber(value))
+    return true
+  end
+  if PlaySoundFile then
+    PlaySoundFile(value)
+    return true
+  end
+  return false
+end
+
+function TwAuras:HandleAuraSoundState(aura, state)
+  local soundActions = aura and aura.soundActions or nil
+  local audioState
+  local now
+  if not aura or not soundActions then
+    return
+  end
+  audioState = self:GetAuraAudioState(aura)
+  now = GetTime()
+
+  if state and state.active then
+    if not audioState.wasActive then
+      self:PlayConfiguredSound(soundActions.startSound)
+      audioState.nextActiveAt = now
+    end
+    audioState.wasActive = true
+  else
+    if audioState.wasActive then
+      self:PlayConfiguredSound(soundActions.stopSound)
+    end
+    self:ClearAuraAudioState(aura)
+  end
+end
+
+function TwAuras:UpdateAuraLoopSounds(now)
+  local auras = self:GetAuraList()
+  local i
+  for i = 1, table.getn(auras) do
+    local aura = auras[i]
+    local audioState = self:GetAuraAudioState(aura)
+    local soundActions = aura.soundActions or nil
+    if audioState.wasActive
+      and aura.__state
+      and aura.__state.active
+      and soundActions
+      and soundActions.activeSound ~= "" then
+      if not audioState.nextActiveAt or now >= audioState.nextActiveAt then
+        self:PlayConfiguredSound(soundActions.activeSound)
+        audioState.nextActiveAt = now + (soundActions.activeInterval or 2)
+      end
     end
   end
 end

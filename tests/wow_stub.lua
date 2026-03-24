@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.3
+-- TwAuras file version: 0.1.4
 local stub = {}
 
 local currentTime = 0
@@ -43,6 +43,7 @@ local mountedState = false
 local stealthedState = false
 local partyMembers = 0
 local raidMembers = 0
+local playedSounds = {}
 
 local function ensureUnit(unit)
   unitData[unit] = unitData[unit] or {}
@@ -343,6 +344,12 @@ function stub.install()
   end
 
   _G.CooldownFrame_SetTimer = noop
+  _G.PlaySound = function(soundId)
+    table.insert(playedSounds, tostring(soundId))
+  end
+  _G.PlaySoundFile = function(soundPath)
+    table.insert(playedSounds, tostring(soundPath))
+  end
 
   _G.IsUsableAction = function(slot)
     local action = actionSlots[slot]
@@ -412,6 +419,14 @@ end
 
 function stub.get_messages()
   return messages
+end
+
+function stub.get_played_sounds()
+  return playedSounds
+end
+
+function stub.clear_played_sounds()
+  playedSounds = {}
 end
 
 function stub.set_spellbook(spells)

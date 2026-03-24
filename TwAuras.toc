@@ -1,14 +1,15 @@
 ## This file controls addon load order for Vanilla/TurtleWoW.
-## TwAuras-File-Version: 0.1.24
+## TwAuras-File-Version: 0.1.26
 ## Interface: 11200
 ## Title: TwAuras
 ## Notes: Lightweight WeakAuras-style tracker for TurtleWoW 1.12
 ## Author: OpenAI + Matt Wilson
-## Version: 0.1.5
+## Version: 0.1.7
 ## SavedVariables: TwAurasDB
 
 TwAuras.lua
 IconList.lua
+SoundList.lua
 Core.lua
 Triggers.lua
 Regions.lua

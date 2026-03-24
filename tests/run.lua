@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.10
+-- TwAuras file version: 0.1.11
 local function dirname(path)
   local normalized = string.gsub(path, "\\", "/")
   return string.match(normalized, "^(.*)/[^/]+$") or "."
@@ -50,6 +50,7 @@ local function fresh_runtime()
   TwAuras.runtime.targetManaEstimates = {}
   TwAuras.runtime.lastPlayerComboPoints = 0
   TwAuras.runtime.playerCast = {}
+  TwAuras.runtime.auraAudio = {}
   stub.set_spellbook({})
   stub.set_forms({})
   stub.set_zone("Darnassus", "")
@@ -59,6 +60,7 @@ local function fresh_runtime()
   stub.set_weapon_enchant(nil)
   stub.set_player_state({})
   stub.set_group_state({})
+  stub.clear_played_sounds()
 end
 
 add_test("rip snapshots combo points at cast start", function()
@@ -843,6 +845,60 @@ add_test("combat log skips real mana estimation when no aura uses the tokens", f
 
   TwAuras:RecordCombatLog("CHAT_MSG_SPELL_SELF_DAMAGE", "Your Viper Sting drains 80 Mana from Mana Dummy.")
   assert_true(next(TwAuras.runtime.targetManaEstimates) == nil, "target mana estimator should stay idle when no aura uses the tokens")
+end)
+
+add_test("aura lifecycle sounds play on start loop and stop", function()
+  fresh_runtime()
+  stub.set_time(200)
+
+  local aura = {
+    id = 600,
+    key = "aura_600",
+    schemaVersion = 1,
+    name = "Sound Aura",
+    soundActions = {
+      startSound = "Sound\\Interface\\RaidWarning.wav",
+      activeSound = "567",
+      activeInterval = 1,
+      stopSound = "Sound\\Interface\\MapPing.wav",
+    },
+    __state = {
+      active = false,
+    },
+  }
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {600},
+      items = {
+        ["600"] = aura,
+      },
+    },
+  }
+
+  TwAuras:HandleAuraSoundState(aura, { active = true })
+  local played = stub.get_played_sounds()
+  assert_equal(table.getn(played), 1, "start transition should play one sound")
+  assert_equal(played[1], "Sound\\Interface\\RaidWarning.wav", "start transition should play configured start sound")
+
+  stub.advance_time(1)
+  TwAuras.runtime.auraAudio[aura.id] = TwAuras.runtime.auraAudio[aura.id] or { wasActive = true, nextActiveAt = GetTime() }
+  aura.__state = { active = true }
+  TwAuras:UpdateAuraLoopSounds(GetTime())
+  played = stub.get_played_sounds()
+  assert_equal(table.getn(played), 2, "active loop should add one repeated sound")
+  assert_equal(played[2], "567", "numeric active sound ids should route through PlaySound")
+
+  aura.__state = { active = false }
+  TwAuras:HandleAuraSoundState(aura, { active = false })
+  played = stub.get_played_sounds()
+  assert_equal(table.getn(played), 3, "stop transition should add one sound")
+  assert_equal(played[3], "Sound\\Interface\\MapPing.wav", "stop transition should play configured stop sound")
+
+  stub.advance_time(2)
+  TwAuras:UpdateAuraLoopSounds(GetTime())
+  played = stub.get_played_sounds()
+  assert_equal(table.getn(played), 3, "stop transition should also prevent any future repeat sounds")
 end)
 
 local passed = 0

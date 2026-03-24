@@ -1,7 +1,7 @@
 # TwAuras
 
-Addon Version: `0.1.24`  
-Readme Version: `0.1.9`
+Addon Version: `0.1.26`  
+Readme Version: `0.1.11`
 
 TwAuras is a lightweight WeakAuras-style addon for TurtleWoW / WoW 1.12 focused on building configurable icons, bars, and text trackers in game.
 
@@ -27,6 +27,7 @@ From there, users can:
 - Show dynamic text such as remaining time, stack count, current value, and percentages
 - Customize icon color, bar color, background color, alpha, font size, outline, and text anchors
 - Add conditions that can change colors, alpha, desaturation, and glow when thresholds are met
+- Play configured WoW sound files when an aura starts, while it stays active, or when it stops
 - Save aura definitions between reloads and logins
 
 ## Current Trigger Types
@@ -81,6 +82,7 @@ Current debuff timer support includes:
 3. Configure one or more triggers in the `Trigger` tab
 4. Configure `icon`, `bar`, or `text` output in the `Display` tab
 5. Add optional visual rules in the `Conditions` tab
+   - including one-shot start sounds, repeating active sounds, and one-shot stop sounds
 6. Add optional restrictions in the `Load` tab
 7. Place the aura in the `Position` tab or unlock and drag it
 8. Click `Apply`
@@ -102,11 +104,13 @@ These create a new aura with sensible defaults so the user can finish setup fast
 TwAuras currently supports:
 
 - icon picker with search and paging
+- sound picker with search and paging
 - icon path override
 - icon desaturation
 - icon hue picker with live preview
 - icon cooldown swipe overlay
 - icon cooldown dark overlay
+- sound path or sound id support for condition lifecycle audio
 - inactive desaturation
 - main color tint
 - background color
