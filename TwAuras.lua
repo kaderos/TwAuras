@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.18
+-- TwAuras file version: 0.1.20
 -- Addon bootstrap, defaults, and frame event wiring.
 local addonName = "TwAuras"
 
@@ -16,7 +16,9 @@ TwAuras = {
   runtime = {
     timers = {},
     recentCombatLog = {},
+    trackedBuffs = {},
     trackedDebuffs = {},
+    pendingBuffCasts = {},
     pendingDebuffCasts = {},
     targetHealthEstimates = {},
     targetManaEstimates = {},
@@ -229,11 +231,78 @@ TwAuras = {
 -- These default auras also serve as concrete examples of the saved-data format that the editor
 -- and runtime normalize around.
 -- Slash commands open the main tabbed editor directly so users land in the real aura-building UI.
+function TwAuras:RefreshObjectTracker()
+  if not self.objectTrackerFrame or not self.objectTrackerFrame:IsShown() then
+    return
+  end
+  if self.objectTrackerFrame.text then
+    self.objectTrackerFrame.text:SetText("Objects: " .. tostring(self:GetObjectSummaryCount()))
+  end
+end
+
+function TwAuras:EnsureObjectTrackerFrame()
+  if self.objectTrackerFrame then
+    return self.objectTrackerFrame
+  end
+
+  local frame = CreateFrame("Frame", nil, UIParent)
+  frame:SetWidth(132)
+  frame:SetHeight(28)
+  frame:SetPoint("TOP", UIParent, "TOP", 0, -120)
+  frame:SetFrameStrata("MEDIUM")
+  frame:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true,
+    tileSize = 16,
+    edgeSize = 12,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 },
+  })
+  frame:SetBackdropColor(0, 0, 0, 0.85)
+  frame:SetMovable(true)
+  frame:EnableMouse(true)
+  frame:RegisterForDrag("LeftButton")
+  frame:SetScript("OnDragStart", function()
+    this:StartMoving()
+  end)
+  frame:SetScript("OnDragStop", function()
+    this:StopMovingOrSizing()
+  end)
+
+  frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  frame.text:SetPoint("CENTER", frame, "CENTER", 0, 0)
+  frame.text:SetJustifyH("CENTER")
+  frame.text:SetText("Objects: 0")
+  frame:Hide()
+
+  self.objectTrackerFrame = frame
+  return frame
+end
+
+function TwAuras:ToggleObjectTracker()
+  local frame = self:EnsureObjectTrackerFrame()
+  if frame:IsShown() then
+    frame:Hide()
+    return
+  end
+  frame:Show()
+  self:RefreshObjectTracker()
+end
+
+function TwAuras:HandleSlashCommand(msg)
+  local trimmed = string.lower(string.gsub(msg or "", "^%s*(.-)%s*$", "%1"))
+  if trimmed == "obj" then
+    self:ToggleObjectTracker()
+    return
+  end
+  self:ToggleConfig()
+end
+
 SLASH_TWAURAS1 = "/twa"
 SLASH_TWAURAS2 = "/twauras"
 
 SlashCmdList["TWAURAS"] = function(msg)
-  TwAuras:ToggleConfig()
+  TwAuras:HandleSlashCommand(msg)
 end
 
 TwAuras.frame:SetScript("OnEvent", function()
@@ -308,10 +377,11 @@ TwAuras.frame:SetScript("OnUpdate", function()
     TwAuras.lastUpdate = 0
   end
   local now = GetTime()
-  if now - TwAuras.lastUpdate >= 0.10 then
-    TwAuras.lastUpdate = now
-    TwAuras:RefreshDynamicTexts(now)
-    TwAuras:RefreshTimedAuras()
-    TwAuras:UpdateAuraLoopSounds(now)
-  end
-end)
+    if now - TwAuras.lastUpdate >= 0.10 then
+      TwAuras.lastUpdate = now
+      TwAuras:RefreshDynamicTexts(now)
+      TwAuras:RefreshTimedAuras()
+      TwAuras:UpdateAuraLoopSounds(now)
+      TwAuras:RefreshObjectTracker()
+    end
+  end)

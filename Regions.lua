@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.17
+-- TwAuras file version: 0.1.19
 -- Region helpers handle positioning, coloring, and drag behavior shared by all displays.
 local function SetColor(region, color)
   if not region then
@@ -223,6 +223,62 @@ local function GetBarColor(display, state)
   return display.color or {1, 1, 1, 1}
 end
 
+local function GetBarIconSide(display)
+  local fillDirection = display and display.fillDirection or "ltr"
+  local iconPosition = display and display.barIconPosition or "front"
+  local frontSide = fillDirection == "rtl" and "right" or "left"
+  local backSide = frontSide == "left" and "right" or "left"
+  if iconPosition == "back" then
+    return backSide
+  end
+  return frontSide
+end
+
+local function ApplyBarIconPoint(icon, frame, display)
+  if not icon or not frame then
+    return
+  end
+  icon:ClearAllPoints()
+  if GetBarIconSide(display) == "right" then
+    icon:SetPoint("LEFT", frame, "RIGHT", 4, 0)
+  else
+    icon:SetPoint("RIGHT", frame, "LEFT", -4, 0)
+  end
+end
+
+local function GetNamedFrame(name)
+  if _G and _G[name] then
+    return _G[name]
+  end
+  if getglobal then
+    return getglobal(name)
+  end
+  return nil
+end
+
+local function GetFrameTargetEntries(scope)
+  local entries = {}
+  local normalized = string.lower(scope or "party")
+  local i
+  if normalized == "party" or normalized == "both" then
+    for i = 1, 4 do
+      table.insert(entries, {
+        unit = "party" .. i,
+        frame = GetNamedFrame("PartyMemberFrame" .. i),
+      })
+    end
+  end
+  if normalized == "raid" or normalized == "both" then
+    for i = 1, 40 do
+      table.insert(entries, {
+        unit = "raid" .. i,
+        frame = GetNamedFrame("RaidGroupButton" .. i),
+      })
+    end
+  end
+  return entries
+end
+
 -- Icon regions are the default display type for buffs, debuffs, and timer-style auras.
 function TwAuras:CreateIconRegion(aura)
   local frame = CreateFrame("Frame", nil, UIParent)
@@ -362,7 +418,7 @@ function TwAuras:CreateBarRegion(aura)
   frame.icon = frame:CreateTexture(nil, "ARTWORK")
   frame.icon:SetWidth(frame:GetHeight())
   frame.icon:SetHeight(frame:GetHeight())
-  frame.icon:SetPoint("RIGHT", frame, "LEFT", -4, 0)
+  ApplyBarIconPoint(frame.icon, frame, aura.display)
 
   frame.label = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 
@@ -376,6 +432,7 @@ function TwAuras:CreateBarRegion(aura)
     self:SetHeight(display.height or 16)
     self.icon:SetWidth(self:GetHeight())
     self.icon:SetHeight(self:GetHeight())
+    ApplyBarIconPoint(self.icon, self, display)
     ApplyPoint(self, auraObj.position)
     ApplyStrata(self, display)
     self:SetAlpha(display.alpha or 1)
@@ -518,6 +575,101 @@ function TwAuras:CreateTextRegion(aura)
   return frame
 end
 
+function TwAuras:CreateUnitFrameRegion(aura)
+  local frame = CreateFrame("Frame", nil, UIParent)
+  frame.__aura = aura
+  frame.overlays = {}
+  frame:SetWidth(1)
+  frame:SetHeight(1)
+
+  function frame:GetOverlay(index)
+    if self.overlays[index] then
+      return self.overlays[index]
+    end
+    local overlay = CreateFrame("Frame", nil, self)
+    overlay.icon = overlay:CreateTexture(nil, "OVERLAY")
+    overlay.icon:SetAllPoints(overlay)
+    overlay:SetBackdrop({
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      edgeSize = 12,
+      insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    overlay:Hide()
+    self.overlays[index] = overlay
+    return overlay
+  end
+
+  function frame:HideOverlays()
+    local i
+    for i = 1, table.getn(self.overlays) do
+      local overlay = self.overlays[i]
+      overlay.icon:Hide()
+      overlay:Hide()
+    end
+  end
+
+  function frame:ApplyUnitStates(auraObj, unitStates)
+    local display = auraObj.display or {}
+    local targets = GetFrameTargetEntries(display.frameScope)
+    local targetByUnit = {}
+    local i
+    for i = 1, table.getn(targets) do
+      if targets[i].frame then
+        targetByUnit[targets[i].unit] = targets[i].frame
+      end
+    end
+
+    self:HideOverlays()
+
+    for i = 1, table.getn(unitStates or {}) do
+      local state = unitStates[i]
+      local targetFrame = targetByUnit[state.unit]
+      if state and targetFrame then
+        local overlay = self:GetOverlay(i)
+        ApplyStrata(overlay, display)
+        overlay:SetAlpha(display.alpha or 1)
+        overlay:ClearAllPoints()
+        if display.overlayStyle == "glow" then
+          overlay:SetPoint("TOPLEFT", targetFrame, "TOPLEFT", -2, 2)
+          overlay:SetPoint("BOTTOMRIGHT", targetFrame, "BOTTOMRIGHT", 2, -2)
+          overlay.icon:Hide()
+          if overlay.SetBackdropBorderColor then
+            local color = display.glowColor or display.color or {1, 0.2, 0.2, 1}
+            overlay:SetBackdropBorderColor(color[1] or 1, color[2] or 0.2, color[3] or 0.2, color[4] or 1)
+          end
+        else
+          local iconX = 0
+          if display.frameAnchor == "TOPLEFT" then
+            iconX = 2
+          elseif display.frameAnchor == "TOPRIGHT" then
+            iconX = -2
+          end
+          overlay:SetWidth(display.width or 16)
+          overlay:SetHeight(display.height or 16)
+          overlay:SetPoint(display.frameAnchor or "TOPLEFT", targetFrame, display.frameAnchor or "TOPLEFT", iconX, display.frameYOffset or 0)
+          overlay:SetBackdrop(nil)
+          overlay.icon:SetTexture((display.iconPath ~= "" and display.iconPath) or state.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
+          if overlay.icon.SetDesaturated then
+            overlay.icon:SetDesaturated(display.iconDesaturate and true or false)
+          end
+          SetColor(overlay.icon, GetIconTint(display))
+          overlay.icon:Show()
+        end
+        overlay:Show()
+      end
+    end
+  end
+
+  function frame:SetInactive()
+    self:HideOverlays()
+  end
+
+  function frame:SetMovableState()
+  end
+
+  return frame
+end
+
 function TwAuras:CreateRegion(aura)
   local regionType = self:GetRegionType(aura.regionType)
   if regionType and regionType.create then
@@ -589,6 +741,9 @@ TwAuras:RegisterRegionType("bar", {
       { value = "smart", label = "Smart" }, { value = "mmss", label = "MM:SS" }, { value = "seconds", label = "Seconds" }, { value = "decimal", label = "Decimal" }
     } },
     { key = "showIcon", label = "Show Icon", type = "bool", default = false },
+    { key = "barIconPosition", label = "Icon Position", type = "select", width = 110, default = "front", options = {
+      { value = "front", label = "Front" }, { value = "back", label = "Back" }
+    } },
     { key = "showLabelText", label = "Show Label", type = "bool", default = true },
     { key = "showTimerText", label = "Show Timer Text", type = "bool", default = false },
     { key = "fillDirection", label = "Fill Direction", type = "select", width = 110, default = "ltr", options = {
@@ -637,6 +792,33 @@ TwAuras:RegisterRegionType("text", {
   },
   create = function(self, aura)
     return self:CreateTextRegion(aura)
+  end,
+})
+
+TwAuras:RegisterRegionType("unitframes", {
+  displayName = "Party / Raid Frames",
+  fields = {
+    { key = "label", label = "Label", type = "text", width = 180, default = "" },
+    { key = "overlayStyle", label = "Overlay Style", type = "select", width = 110, default = "icon", options = {
+      { value = "icon", label = "Icon" }, { value = "glow", label = "Glow" }
+    } },
+    { key = "frameScope", label = "Frame Scope", type = "select", width = 100, default = "party", options = {
+      { value = "party", label = "Party" }, { value = "raid", label = "Raid" }, { value = "both", label = "Both" }
+    } },
+    { key = "iconPath", label = "Icon Path", type = "text", width = 250, default = "", help = "Leave blank to use trigger icon" },
+    { key = "width", label = "Icon Width", type = "number", width = 60, default = 16 },
+    { key = "height", label = "Icon Height", type = "number", width = 60, default = 16 },
+    { key = "frameAnchor", label = "Frame Anchor", type = "select", width = 100, default = "TOPLEFT", options = {"TOPLEFT", "TOP", "TOPRIGHT"} },
+    { key = "frameYOffset", label = "Y Offset", type = "number", width = 60, default = 0 },
+    { key = "strata", label = "Layer", type = "select", width = 100, default = "HIGH", options = {"BACKGROUND", "LOW", "MEDIUM", "HIGH"} },
+    { key = "iconDesaturate", label = "Desaturate Icon", type = "bool", default = false },
+    { key = "iconHueEnabled", label = "Enable Icon Hue", type = "bool", default = false },
+    { key = "iconHue", label = "Icon Hue", type = "hue", width = 126, default = 0, hoverText = "Choose a hue tint for frame overlay icons." },
+    { key = "color", label = "Icon RGBA", type = "color4", default = {1, 1, 1, 1} },
+    { key = "glowColor", label = "Glow RGBA", type = "color4", default = {1, 0.2, 0.2, 1} },
+  },
+  create = function(self, aura)
+    return self:CreateUnitFrameRegion(aura)
   end,
 })
 

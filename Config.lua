@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.29
+-- TwAuras file version: 0.1.37
 -- Config.lua owns editor-only concerns: aura CRUD, dynamic trigger lists, and descriptor-driven widgets.
 local function SafeLower(value)
   if not value then
@@ -347,6 +347,65 @@ function TwAuras:AddAura()
   self.db.selectedConditionIndex = 1
   self:RefreshAll()
   self:RefreshConfigUI()
+end
+
+function TwAuras:DuplicateAura(auraId)
+  local aura = auraId and self:GetAuraById(auraId) or self:GetSelectedAura()
+  local duplicate
+  if not aura then
+    return
+  end
+  duplicate = self:DuplicateAuraRecord(aura)
+  if not duplicate then
+    return
+  end
+  self:NormalizeAuraConfig(duplicate)
+  self:EnsureSingleBlankTrigger(duplicate)
+  self:InsertAuraRecord(duplicate)
+  self.regions[duplicate.id] = self:CreateRegion(duplicate)
+  self.db.selectedAuraId = duplicate.id
+  self.db.selectedTriggerIndex = 1
+  self.db.selectedConditionIndex = 1
+  self:RefreshAll()
+  self:RefreshConfigUI()
+end
+
+function TwAuras:OpenAuraRowMenu(row)
+  if not self.configFrame or not row or not row.__auraId then
+    return
+  end
+  local menu = self.configFrame.auraRowMenu
+  if not menu then
+    menu = CreateFrame("Frame", "TwAurasAuraRowMenu", self.configFrame)
+    menu:SetWidth(96)
+    menu:SetHeight(54)
+    menu:SetFrameStrata("DIALOG")
+    menu:SetBackdrop({
+      bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = true,
+      tileSize = 16,
+      edgeSize = 12,
+      insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    menu:SetBackdropColor(0, 0, 0, 0.95)
+    menu.duplicateButton = MakeButton(menu, "Duplicate", 78, 20, 8, -8, function()
+      if not TwAuras.configFrame.auraRowMenu.__auraId then
+        return
+      end
+      TwAuras:DuplicateAura(TwAuras.configFrame.auraRowMenu.__auraId)
+      TwAuras.configFrame.auraRowMenu:Hide()
+    end)
+    menu.cancelButton = MakeButton(menu, "Close", 78, 20, 8, -30, function()
+      TwAuras.configFrame.auraRowMenu:Hide()
+    end)
+    menu:Hide()
+    self.configFrame.auraRowMenu = menu
+  end
+  menu.__auraId = row.__auraId
+  menu:ClearAllPoints()
+  menu:SetPoint("TOPLEFT", row, "TOPRIGHT", 2, 0)
+  menu:Show()
 end
 
 function TwAuras:AddWizardAura(style)
@@ -1192,11 +1251,15 @@ function TwAuras:EnsureAuraListRows(parent, wanted)
   local i
   for i = table.getn(rows) + 1, wanted do
     local button = CreateFrame("Button", nil, parent)
-    button:SetWidth(168)
+    button:SetWidth(204)
     button:SetHeight(18)
     button:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((i - 1) * 20))
     button.bg = button:CreateTexture(nil, "BACKGROUND")
     button.bg:SetAllPoints(button)
+    button.icon = button:CreateTexture(nil, "ARTWORK")
+    button.icon:SetWidth(14)
+    button.icon:SetHeight(14)
+    button.icon:SetPoint("LEFT", button, "LEFT", 4, 0)
     button.previewCheck = CreateFrame("CheckButton", nil, button, "UICheckButtonTemplate")
     button.previewCheck:SetWidth(18)
     button.previewCheck:SetHeight(18)
@@ -1211,14 +1274,21 @@ function TwAuras:EnsureAuraListRows(parent, wanted)
       TwAuras:RefreshAuraList()
     end)
     button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    button.text:SetPoint("LEFT", button, "LEFT", 4, 0)
-    button.text:SetWidth(126)
+    button.text:SetPoint("LEFT", button.icon, "RIGHT", 4, 0)
+    button.text:SetWidth(144)
     button.text:SetJustifyH("LEFT")
-    button:SetScript("OnClick", function()
-      TwAuras.db.selectedAuraId = this.__auraId
-      TwAuras.db.selectedTriggerIndex = 1
-      TwAuras.db.selectedConditionIndex = 1
-      TwAuras:RefreshConfigUI()
+    button:SetScript("OnMouseUp", function()
+      if arg1 == "RightButton" then
+        TwAuras:OpenAuraRowMenu(this)
+      else
+        if TwAuras.configFrame and TwAuras.configFrame.auraRowMenu then
+          TwAuras.configFrame.auraRowMenu:Hide()
+        end
+        TwAuras.db.selectedAuraId = this.__auraId
+        TwAuras.db.selectedTriggerIndex = 1
+        TwAuras.db.selectedConditionIndex = 1
+        TwAuras:RefreshConfigUI()
+      end
     end)
     rows[i] = button
   end
@@ -1292,17 +1362,25 @@ function TwAuras:RefreshAuraList()
   end
   local auras = self:GetAuraList()
   self.configFrame.auraRows = self:EnsureAuraListRows(self.configFrame.auraListContent, math.max(1, table.getn(auras)))
-  self.configFrame.auraListContent:SetWidth(168)
+  self.configFrame.auraListContent:SetWidth(204)
   self.configFrame.auraListContent:SetHeight(math.max(1, table.getn(auras) * 20))
   local i
   for i = 1, table.getn(self.configFrame.auraRows) do
     local row = self.configFrame.auraRows[i]
     local aura = auras[i]
     if aura then
+      local iconPath = self:GetAuraListPreviewIcon(aura)
       row.__auraId = aura.id
       row.previewCheck.__auraId = aura.id
       row.previewCheck:SetChecked(self:IsAuraPreviewing(aura.id) and true or false)
       row.text:SetText(aura.name .. " - " .. self:GetAuraSummary(aura, 96))
+      if iconPath and iconPath ~= "" then
+        row.icon:SetTexture(iconPath)
+        row.icon:Show()
+      else
+        row.icon:SetTexture(nil)
+        row.icon:Hide()
+      end
       if self.db.selectedAuraId == aura.id then
         row.bg:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
         row.bg:SetVertexColor(0.2, 0.8, 0.2, 0.35)
@@ -1313,11 +1391,20 @@ function TwAuras:RefreshAuraList()
       row.previewCheck:Show()
       row:Show()
     else
+      row.icon:SetTexture(nil)
+      row.icon:Hide()
       row.previewCheck:SetChecked(false)
       row.previewCheck:Hide()
       row:Hide()
     end
   end
+end
+
+function TwAuras:RefreshObjectSummary()
+  if not self.configFrame or not self.configFrame.objectSummaryText then
+    return
+  end
+  self.configFrame.objectSummaryText:SetText("Objects: " .. tostring(self:GetObjectSummaryCount()))
 end
 
 -- Trigger rows are separate from trigger fields so one aura can own many conditions cleanly.
@@ -1517,6 +1604,7 @@ function TwAuras:RefreshConfigUI()
   self:EnsureSelectedAuraPreview()
   self:RefreshAll()
   self:RefreshAuraList()
+  self:RefreshObjectSummary()
   self:RefreshEditorFields()
 end
 
@@ -1633,9 +1721,9 @@ function TwAuras:BuildConfigFrame()
   end
 
   local frame = CreateFrame("Frame", "TwAurasConfigFrame", UIParent)
-  frame:SetWidth(820)
+  frame:SetWidth(960)
   frame:SetHeight(620)
-  frame:SetPoint("CENTER", UIParent, "CENTER", 240, 0)
+  frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
   frame:SetBackdrop({
     bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
     edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
@@ -1651,61 +1739,76 @@ function TwAuras:BuildConfigFrame()
   frame.title:SetText("TwAuras Config")
 
   frame.leftPanel = CreateFrame("Frame", nil, frame)
-  frame.leftPanel:SetWidth(190)
-  frame.leftPanel:SetHeight(490)
+  frame.leftPanel:SetWidth(226)
+  frame.leftPanel:SetHeight(540)
   frame.leftPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -42)
   local leftBackground = frame.leftPanel:CreateTexture(nil, "BACKGROUND")
   leftBackground:SetAllPoints(frame.leftPanel)
   leftBackground:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
   leftBackground:SetVertexColor(0, 0, 0, 0.25)
+  frame.leftBackground = leftBackground
   MakeLabel(frame.leftPanel, "Auras", 6, -8)
+  frame.addButton = MakeButton(frame.leftPanel, "[+]", 36, 22, 138, -4, function() TwAuras:AddAura() end)
+  frame.wizardButton = MakeButton(frame.leftPanel, "Wizard", 72, 22, 178, -4, function() TwAuras:OpenWizard() end)
   frame.auraListPanel = CreateFrame("Frame", nil, frame.leftPanel)
-  frame.auraListPanel:SetWidth(170)
-  frame.auraListPanel:SetHeight(318)
-  frame.auraListPanel:SetPoint("TOPLEFT", frame.leftPanel, "TOPLEFT", 6, -28)
+  frame.auraListPanel:SetWidth(206)
+  frame.auraListPanel:SetHeight(450)
+  frame.auraListPanel:SetPoint("TOPLEFT", frame.leftPanel, "TOPLEFT", 6, -32)
   frame.auraListScroll = CreateFrame("ScrollFrame", "TwAurasAuraListScroll", frame.auraListPanel, "UIPanelScrollFrameTemplate")
-  frame.auraListScroll:SetWidth(168)
-  frame.auraListScroll:SetHeight(318)
+  frame.auraListScroll:SetWidth(204)
+  frame.auraListScroll:SetHeight(450)
   frame.auraListScroll:SetPoint("TOPLEFT", frame.auraListPanel, "TOPLEFT", 0, 0)
   frame.auraListContent = CreateFrame("Frame", nil, frame.auraListScroll)
-  frame.auraListContent:SetWidth(152)
+  frame.auraListContent:SetWidth(186)
   frame.auraListContent:SetHeight(1)
   frame.auraListScroll:SetScrollChild(frame.auraListContent)
   frame.auraRows = self:BuildAuraListRows(frame.auraListContent)
-  frame.addButton = MakeButton(frame.leftPanel, "New", 80, 22, 6, -366, function() TwAuras:AddAura() end)
-  frame.deleteButton = MakeButton(frame.leftPanel, "Delete", 80, 22, 92, -366, function() TwAuras:DeleteSelectedAura() end)
-  frame.wizardButton = MakeButton(frame.leftPanel, "Wizard", 166, 22, 6, -394, function() TwAuras:OpenWizard() end)
+  frame.deleteButton = MakeButton(frame.leftPanel, "Delete", 76, 22, 6, -490, function() TwAuras:DeleteSelectedAura() end)
+  frame.objectSummaryText = frame.leftPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  frame.objectSummaryText:SetPoint("LEFT", frame.deleteButton, "RIGHT", 8, 0)
+  frame.objectSummaryText:SetWidth(120)
+  frame.objectSummaryText:SetJustifyH("LEFT")
+  frame.objectSummaryText:SetText("Objects: 0")
 
   frame.rightPanel = CreateFrame("Frame", nil, frame)
-  frame.rightPanel:SetWidth(580)
-  frame.rightPanel:SetHeight(490)
-  frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 220, -42)
+  frame.rightPanel:SetWidth(680)
+  frame.rightPanel:SetHeight(540)
+  frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 262, -42)
   local rightBackground = frame.rightPanel:CreateTexture(nil, "BACKGROUND")
   rightBackground:SetAllPoints(frame.rightPanel)
   rightBackground:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
   rightBackground:SetVertexColor(0, 0, 0, 0.18)
+  frame.rightBackground = rightBackground
   frame.editorTitle = frame.rightPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   frame.editorTitle:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 8, -8)
   frame.editorTitle:SetText("Edit")
   frame.summaryText = frame.rightPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   frame.summaryText:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 8, -24)
-  frame.summaryText:SetWidth(540)
+  frame.summaryText:SetWidth(640)
   frame.summaryText:SetJustifyH("LEFT")
   frame.summaryText:SetText("")
 
   frame.tabButtons = {}
-  local tabNames = {"Trigger", "Display", "Conditions", "Load", "Position"}
+  local tabNames = {"Display", "Trigger", "Conditions", "Load"}
   local i
   for i = 1, table.getn(tabNames) do
     local button = CreateFrame("Button", nil, frame.rightPanel, "UIPanelButtonTemplate")
-    button:SetWidth(90)
+    button:SetWidth(102)
     button:SetHeight(20)
-    button:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 8 + ((i - 1) * 94), -48)
+    button:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 8 + ((i - 1) * 106), -48)
     button:SetText(tabNames[i])
     button.__tab = SafeLower(tabNames[i])
     button:SetScript("OnClick", function() TwAuras:ShowConfigTab(this.__tab) end)
     frame.tabButtons[i] = button
   end
+  frame.minimizeButton = CreateFrame("Button", nil, frame.rightPanel, "UIPanelButtonTemplate")
+  frame.minimizeButton:SetWidth(46)
+  frame.minimizeButton:SetHeight(20)
+  frame.minimizeButton:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 8 + (table.getn(tabNames) * 106), -48)
+  frame.minimizeButton:SetText("[ _ ]")
+  frame.minimizeButton:SetScript("OnClick", function()
+    TwAuras:ToggleConfigMinimized()
+  end)
 
   frame.tabs = {
     trigger = CreateFrame("Frame", nil, frame.rightPanel),
@@ -1716,8 +1819,8 @@ function TwAuras:BuildConfigFrame()
   }
   local key, panel
   for key, panel in pairs(frame.tabs) do
-    panel:SetWidth(554)
-    panel:SetHeight(390)
+    panel:SetWidth(654)
+    panel:SetHeight(440)
     panel:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 10, -76)
   end
 
@@ -1840,18 +1943,18 @@ function TwAuras:BuildConfigFrame()
   frame.regionDescriptorHelp:SetWidth(544)
   frame.regionDescriptorHelp:SetJustifyH("LEFT")
   frame.regionFieldPanel = CreateFrame("Frame", nil, displayTab)
-  frame.regionFieldPanel:SetWidth(544)
+  frame.regionFieldPanel:SetWidth(644)
   frame.regionFieldPanel:SetHeight(260)
   frame.regionFieldPanel:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -74)
   frame.regionFieldScroll = CreateFrame("ScrollFrame", "TwAurasRegionFieldScroll", frame.regionFieldPanel, "UIPanelScrollFrameTemplate")
-  frame.regionFieldScroll:SetWidth(540)
+  frame.regionFieldScroll:SetWidth(640)
   frame.regionFieldScroll:SetHeight(260)
   frame.regionFieldScroll:SetPoint("TOPLEFT", frame.regionFieldPanel, "TOPLEFT", 0, 0)
   frame.regionFieldContent = CreateFrame("Frame", nil, frame.regionFieldScroll)
-  frame.regionFieldContent:SetWidth(520)
+  frame.regionFieldContent:SetWidth(620)
   frame.regionFieldContent:SetHeight(1)
   frame.regionFieldScroll:SetScrollChild(frame.regionFieldContent)
-  frame.iconPickerButton = MakeButton(displayTab, "Pick Icon", 90, 20, 462, -4, function() TwAuras:OpenIconPicker() end)
+  frame.iconPickerButton = MakeButton(displayTab, "Pick Icon", 90, 20, 548, -4, function() TwAuras:OpenIconPicker() end)
   frame.alphaSlider = MakeSlider(displayTab, "TwAurasAlphaSlider", 0, 1, 0.05, 8, -344, 220)
   frame.alphaSlider:SetScript("OnValueChanged", function()
     getglobal(this:GetName() .. "Text"):SetText("Alpha: " .. string.format("%.2f", this:GetValue()))
@@ -2003,25 +2106,26 @@ function TwAuras:BuildConfigFrame()
   MakeLabel(loadTab, "world, combat, target, auras, power, combo, health", 8, -164)
   MakeLabel(loadTab, "Leave blank to infer updates from the aura's triggers and load conditions.", 8, -184)
 
-  local positionTab = frame.tabs.position
-  MakeLabel(positionTab, "Anchor Point", 8, -8)
-  frame.pointBox = MakeSelect(positionTab, 120, 20, 108, -4, POINT_OPTIONS, function()
+  local positionTab = displayTab
+  MakeLabel(positionTab, "Position", 8, -360)
+  MakeLabel(positionTab, "Anchor Point", 8, -386)
+  frame.pointBox = MakeSelect(positionTab, 120, 20, 108, -382, POINT_OPTIONS, function()
     if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
-  MakeLabel(positionTab, "Relative Point", 230, -8)
-  frame.relativePointBox = MakeSelect(positionTab, 120, 20, 340, -4, POINT_OPTIONS, function()
+  MakeLabel(positionTab, "Relative Point", 230, -386)
+  frame.relativePointBox = MakeSelect(positionTab, 120, 20, 340, -382, POINT_OPTIONS, function()
     if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
-  MakeLabel(positionTab, "X", 8, -38)
-  frame.xBox = MakeEditBox(positionTab, 80, 20, 108, -34)
-  MakeLabel(positionTab, "Y", 230, -38)
-  frame.yBox = MakeEditBox(positionTab, 80, 20, 340, -34)
+  MakeLabel(positionTab, "X", 8, -416)
+  frame.xBox = MakeEditBox(positionTab, 80, 20, 108, -412)
+  MakeLabel(positionTab, "Y", 230, -416)
+  frame.yBox = MakeEditBox(positionTab, 80, 20, 340, -412)
   frame.unlockHelp = positionTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  frame.unlockHelp:SetPoint("TOPLEFT", positionTab, "TOPLEFT", 8, -76)
+  frame.unlockHelp:SetPoint("TOPLEFT", positionTab, "TOPLEFT", 8, -444)
   frame.unlockHelp:SetWidth(520)
   frame.unlockHelp:SetJustifyH("LEFT")
   frame.unlockHelp:SetText("Use Unlock and drag regions on screen. Use the Debug button below to inspect recent combat log lines and copy the event name plus match text into combat log triggers.")
@@ -2036,26 +2140,172 @@ function TwAuras:BuildConfigFrame()
   frame.lockButton = MakeButton(frame, "Lock", 70, 22, 750, -578, function() TwAuras:SetUnlocked(false) end)
 
   self.configFrame = frame
-  self:ShowConfigTab("trigger")
+  frame.currentTab = "display"
+  frame.minimized = false
+  self:ShowConfigTab("display")
 end
 
 function TwAuras:ShowConfigTab(tabName)
   if not self.configFrame or not self.configFrame.tabs then
     return
   end
+  if self.configFrame.minimized then
+    self:SetConfigMinimized(false)
+  end
+  self.configFrame.currentTab = tabName
   local key, panel
   for key, panel in pairs(self.configFrame.tabs) do
     if key == tabName then panel:Show() else panel:Hide() end
   end
 end
 
+function TwAuras:SetConfigMinimized(flag)
+  local frame = self.configFrame
+  local key, panel
+  local i
+  if not frame then
+    return
+  end
+
+  frame.minimized = flag and true or false
+  if frame.minimized then
+    frame:SetWidth(472)
+    frame:SetHeight(82)
+    frame:SetBackdropColor(0, 0, 0, 0)
+    if frame.leftPanel then
+      frame.leftPanel:Hide()
+      frame.leftPanel:EnableMouse(false)
+    end
+    if frame.rightPanel then
+      frame.rightPanel:SetWidth(452)
+      frame.rightPanel:SetHeight(54)
+      frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -14)
+      frame.rightPanel:EnableMouse(false)
+    end
+    if frame.leftBackground then
+      frame.leftBackground:Hide()
+    end
+    if frame.rightBackground then
+      frame.rightBackground:Hide()
+    end
+    if frame.title then frame.title:Hide() end
+    if frame.editorTitle then frame.editorTitle:Hide() end
+    if frame.summaryText then frame.summaryText:Hide() end
+    if frame.liveUpdateCheck then frame.liveUpdateCheck:Hide() end
+    if frame.applyButton then frame.applyButton:Hide() end
+    if frame.closeButton then frame.closeButton:Hide() end
+    if frame.debugButton then frame.debugButton:Hide() end
+    if frame.unlockButton then frame.unlockButton:Hide() end
+    if frame.lockButton then frame.lockButton:Hide() end
+    if frame.tabs then
+      for key, panel in pairs(frame.tabs) do
+        panel:Hide()
+      end
+    end
+  else
+    frame:SetWidth(960)
+    frame:SetHeight(620)
+    frame:SetBackdropColor(1, 1, 1, 1)
+    if frame.leftPanel then
+      frame.leftPanel:Show()
+      frame.leftPanel:EnableMouse(true)
+    end
+    if frame.rightPanel then
+      frame.rightPanel:SetWidth(680)
+      frame.rightPanel:SetHeight(540)
+      frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 262, -42)
+      frame.rightPanel:EnableMouse(true)
+    end
+    if frame.leftBackground then
+      frame.leftBackground:Show()
+    end
+    if frame.rightBackground then
+      frame.rightBackground:Show()
+    end
+    if frame.title then frame.title:Show() end
+    if frame.editorTitle then frame.editorTitle:Show() end
+    if frame.summaryText then frame.summaryText:Show() end
+    if frame.liveUpdateCheck then frame.liveUpdateCheck:Show() end
+    if frame.applyButton then frame.applyButton:Show() end
+    if frame.closeButton then frame.closeButton:Show() end
+    if frame.debugButton then frame.debugButton:Show() end
+    if frame.unlockButton then frame.unlockButton:Show() end
+    if frame.lockButton then frame.lockButton:Show() end
+    self:ShowConfigTab(frame.currentTab or "display")
+  end
+
+  if frame.tabButtons then
+    for i = 1, table.getn(frame.tabButtons) do
+      if frame.tabButtons[i] then
+        frame.tabButtons[i]:EnableMouse(true)
+        frame.tabButtons[i]:Show()
+      end
+    end
+  end
+  if frame.minimizeButton then
+    frame.minimizeButton:EnableMouse(true)
+    frame.minimizeButton:Show()
+  end
+end
+
+function TwAuras:ToggleConfigMinimized()
+  if not self.configFrame then
+    return
+  end
+  self:SetConfigMinimized(not self.configFrame.minimized)
+end
+
+function TwAuras:IsPlayerInCombat()
+  return UnitAffectingCombat and UnitAffectingCombat("player") and true or false
+end
+
+function TwAuras:HideConfigWindow()
+  if not self.configFrame or not self.configFrame:IsShown() then
+    return false
+  end
+  if self.configFrame.auraRowMenu then
+    self.configFrame.auraRowMenu:Hide()
+  end
+  self.configFrame:Hide()
+  return true
+end
+
+function TwAuras:OpenConfigWindow()
+  self.runtime.pendingConfigOpen = nil
+  self:BuildConfigFrame()
+  self:SetConfigMinimized(false)
+  self.configFrame:Show()
+  self:RefreshConfigUI()
+end
+
+function TwAuras:HandleCombatConfigState(eventName)
+  self.runtime = self.runtime or {}
+  if eventName == "PLAYER_ENTER_COMBAT" then
+    if self:HideConfigWindow() then
+      self.runtime.pendingConfigOpen = true
+      self:Print("Config closed for combat.")
+    end
+  elseif eventName == "PLAYER_LEAVE_COMBAT" then
+    if self.runtime.pendingConfigOpen then
+      self:OpenConfigWindow()
+      self:Print("Config reopened after combat.")
+    end
+  end
+end
+
 function TwAuras:ToggleConfig()
   -- Slash commands and any future menu entry points all flow through this one toggle.
-  self:BuildConfigFrame()
-  if self.configFrame:IsShown() then
-    self.configFrame:Hide()
-  else
-    self.configFrame:Show()
-    self:RefreshConfigUI()
+  if self.configFrame and self.configFrame:IsShown() then
+    self.runtime.pendingConfigOpen = nil
+    self:HideConfigWindow()
+    return
   end
+
+  if self:IsPlayerInCombat() then
+    self.runtime.pendingConfigOpen = true
+    self:Print("Config will open after combat.")
+    return
+  end
+
+  self:OpenConfigWindow()
 end

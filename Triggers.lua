@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.24
+-- TwAuras file version: 0.1.31
 -- Trigger evaluation helpers for aura scans, resource checks, and combat log timers.
 local function CompareValue(value, op, threshold)
   if op == "<" then return value < threshold end
@@ -97,6 +97,98 @@ local TRACKED_DEBUFF_CATALOG = {
 -- window render its fields automatically from the descriptor.
 function TwAuras:GetTrackedDebuffDefinition(name)
   return TRACKED_DEBUFF_CATALOG[SafeLower(name)]
+end
+
+function TwAuras:GetTrackedBuffKey(targetName, buffName)
+  return SafeLower(targetName) .. "::" .. SafeLower(buffName)
+end
+
+function TwAuras:GetTrackedBuff(unit, buffName)
+  local unitName = unit and UnitName(unit) or nil
+  local key
+  if not unitName or unitName == "" or not buffName or buffName == "" then
+    return nil
+  end
+  key = self:GetTrackedBuffKey(unitName, buffName)
+  return self.runtime.trackedBuffs[key]
+end
+
+function TwAuras:SnapshotPendingBuffCast(spellName, targetName)
+  if not spellName or spellName == "" then
+    return
+  end
+  self.runtime.pendingBuffCasts[SafeLower(spellName)] = {
+    spellName = spellName,
+    targetName = SafeLower(targetName or ""),
+    time = GetTime(),
+  }
+end
+
+function TwAuras:GetPendingBuffCast(spellName, targetName)
+  local key = SafeLower(spellName)
+  local pending = self.runtime.pendingBuffCasts[key]
+  if not pending then
+    return nil
+  end
+  if (GetTime() - (pending.time or 0)) > 6 then
+    self.runtime.pendingBuffCasts[key] = nil
+    return nil
+  end
+  if targetName and pending.targetName ~= "" and pending.targetName ~= SafeLower(targetName) then
+    return nil
+  end
+  return pending
+end
+
+function TwAuras:RefreshTrackedBuffAuras(buffName)
+  local wanted = SafeLower(buffName)
+  local auras = self:GetAuraList()
+  local i
+  local j
+  for i = 1, table.getn(auras) do
+    local aura = auras[i]
+    for j = 1, table.getn(aura.triggers or {}) do
+      local trigger = aura.triggers[j]
+      if trigger
+        and trigger.type == "buff"
+        and SafeLower(trigger.auraName) == wanted
+        and trigger.sourceFilter == "player" then
+        self:RefreshAura(aura)
+        break
+      end
+    end
+  end
+end
+
+function TwAuras:StartTrackedBuff(targetName, spellName)
+  local key
+  local entry
+  if not targetName or targetName == "" or not spellName or spellName == "" then
+    return nil
+  end
+  key = self:GetTrackedBuffKey(targetName, spellName)
+  entry = {
+    name = spellName,
+    targetName = SafeLower(targetName),
+    startTime = GetTime(),
+    source = UnitName("player") or "player",
+  }
+  self.runtime.trackedBuffs[key] = entry
+  self.runtime.pendingBuffCasts[SafeLower(spellName)] = nil
+  self:RefreshTrackedBuffAuras(spellName)
+  return entry
+end
+
+function TwAuras:ClearTrackedBuff(targetName, spellName)
+  local key
+  if not targetName or targetName == "" or not spellName or spellName == "" then
+    return
+  end
+  key = self:GetTrackedBuffKey(targetName, spellName)
+  if self.runtime.trackedBuffs[key] then
+    self.runtime.trackedBuffs[key] = nil
+    self:RefreshTrackedBuffAuras(spellName)
+  end
 end
 
 function TwAuras:GetTrackedDebuffKey(targetName, debuffName)
@@ -288,6 +380,65 @@ function TwAuras:TrackPlayerDebuffsFromCombatLog(message)
   end
 end
 
+function TwAuras:TrackPlayerBuffsFromCombatLog(message)
+  local lowerMessage = SafeLower(message)
+  local spellName
+  local targetName
+  local pending
+
+  spellName, targetName = string.match(lowerMessage, "^you cast (.+) on (.+)%.$")
+  if spellName and targetName then
+    self:SnapshotPendingBuffCast(spellName, targetName)
+    self:StartTrackedBuff(targetName, spellName)
+    return
+  end
+
+  spellName, targetName = string.match(lowerMessage, "^you perform (.+) on (.+)%.$")
+  if spellName and targetName then
+    self:SnapshotPendingBuffCast(spellName, targetName)
+    self:StartTrackedBuff(targetName, spellName)
+    return
+  end
+
+  spellName = string.match(lowerMessage, "^you gain (.+)%.$")
+  if spellName then
+    self:StartTrackedBuff(UnitName("player") or "player", spellName)
+    return
+  end
+
+  targetName, spellName = string.match(lowerMessage, "^(.+) gains your (.+)%.$")
+  if targetName and spellName then
+    self:StartTrackedBuff(targetName, spellName)
+    return
+  end
+
+  targetName, spellName = string.match(lowerMessage, "^(.+) gains (.+)%.$")
+  if targetName and spellName then
+    pending = self:GetPendingBuffCast(spellName, targetName)
+    if pending then
+      self:StartTrackedBuff(targetName, spellName)
+      return
+    end
+  end
+
+  spellName, targetName = string.match(lowerMessage, "^your (.+) fades from (.+)%.$")
+  if spellName and targetName then
+    self:ClearTrackedBuff(targetName, spellName)
+    return
+  end
+
+  spellName = string.match(lowerMessage, "^you lose (.+)%.$")
+  if spellName then
+    self:ClearTrackedBuff(UnitName("player") or "player", spellName)
+    return
+  end
+
+  spellName, targetName = string.match(lowerMessage, "^(.+) fades from (.+)%.$")
+  if spellName and targetName then
+    self:ClearTrackedBuff(targetName, spellName)
+  end
+end
+
 
 -- Hostility checks need a fallback because Vanilla APIs are limited compared to modern WoW.
 local function UnitIsHostileFallback(unit)
@@ -388,6 +539,81 @@ function TwAuras:FindSpellBookSlot(spellName)
   end
 
   return nil, nil
+end
+
+function TwAuras:GetSpellTextureByName(spellName)
+  local index = self:FindSpellBookSlot(spellName)
+  local bookType = GetSpellBookType()
+  if index and GetSpellTexture then
+    return GetSpellTexture(index, bookType)
+  end
+  return nil
+end
+
+function TwAuras:GetFormTextureByName(formName)
+  local wanted = SafeLower(formName)
+  local count = GetNumShapeshiftForms and GetNumShapeshiftForms() or 0
+  local index
+  if wanted == "" then
+    return nil
+  end
+  for index = 1, count do
+    local icon, name = GetShapeshiftFormInfo(index)
+    if SafeLower(name) == wanted then
+      return icon
+    end
+  end
+  return nil
+end
+
+function TwAuras:GetTriggerPreviewIcon(trigger)
+  local triggerType = SafeLower(trigger and trigger.type or "")
+  if not trigger or triggerType == "" or triggerType == "none" then
+    return nil
+  end
+  if triggerType == "itemcooldown" then
+    local info = self:GetInventoryCooldownInfo(trigger.itemSlot)
+    return info and info.icon or nil
+  elseif triggerType == "bagitemcooldown" then
+    local info = self:GetBagItemCooldownInfo(trigger.itemName)
+    return info and info.icon or nil
+  elseif triggerType == "itemequipped" then
+    local info = self:GetEquippedItemInfo(trigger.itemName, trigger.equipmentSlot)
+    return info and info.icon or nil
+  elseif triggerType == "actionusable" then
+    local info = self:GetActionUsableInfo(trigger.actionSlot)
+    return info and info.icon or nil
+  elseif triggerType == "weaponenchant" then
+    local slot = SafeLower(trigger.weaponHand or "mainhand") == "offhand" and 17 or 16
+    return GetInventoryItemTexture and GetInventoryItemTexture("player", slot) or nil
+  elseif triggerType == "form" then
+    return self:GetFormTextureByName(trigger.formName)
+  elseif triggerType == "buff" or triggerType == "debuff" then
+    return self:GetSpellTextureByName(trigger.auraName)
+  elseif triggerType == "spellcast"
+    or triggerType == "cooldown"
+    or triggerType == "spellusable"
+    or triggerType == "spellknown"
+    or triggerType == "casting" then
+    return self:GetSpellTextureByName(trigger.spellName)
+  elseif triggerType == "internalcooldown" then
+    return self:GetSpellTextureByName(trigger.procName)
+  end
+  return nil
+end
+
+function TwAuras:GetAuraListPreviewIcon(aura)
+  local i
+  if aura and aura.display and aura.display.iconPath and aura.display.iconPath ~= "" then
+    return aura.display.iconPath
+  end
+  for i = 1, table.getn(aura and aura.triggers or {}) do
+    local icon = self:GetTriggerPreviewIcon(aura.triggers[i])
+    if icon and icon ~= "" then
+      return icon
+    end
+  end
+  return nil
 end
 
 function TwAuras:GetSpellCooldownInfo(spellName)
@@ -510,6 +736,58 @@ function TwAuras:GetInventoryCooldownInfo(slot)
     ready = (remaining or 0) <= 0,
     enabled = enabled,
   }
+end
+
+function TwAuras:GetBagItemCooldownInfo(itemName)
+  local wanted = SafeLower(itemName)
+  local bag
+  if wanted == "" or not GetContainerNumSlots or not GetContainerItemLink then
+    return nil
+  end
+
+  for bag = 0, (NUM_BAG_SLOTS or 4) do
+    local slotCount = GetContainerNumSlots(bag) or 0
+    local slot
+    for slot = 1, slotCount do
+      local link = GetContainerItemLink(bag, slot)
+      if link and TextContains(link, wanted) then
+        local texture = nil
+        local count = 1
+        local startTime = 0
+        local duration = 0
+        local enabled = 0
+        local cooldownDuration
+        local expirationTime
+        local remaining
+
+        if GetContainerItemInfo then
+          texture, count = GetContainerItemInfo(bag, slot)
+        end
+        if GetContainerItemCooldown then
+          startTime, duration, enabled = GetContainerItemCooldown(bag, slot)
+        end
+
+        cooldownDuration, expirationTime, remaining = GetCooldownWindow(startTime, duration)
+
+        return {
+          found = true,
+          bag = bag,
+          slot = slot,
+          icon = texture,
+          name = itemName,
+          count = count or 1,
+          startTime = tonumber(startTime) or 0,
+          duration = cooldownDuration,
+          expirationTime = expirationTime,
+          remaining = remaining or 0,
+          ready = (remaining or 0) <= 0,
+          enabled = enabled,
+        }
+      end
+    end
+  end
+
+  return nil
 end
 
 function TwAuras:GetEquippedItemInfo(itemName, wantedSlot)
@@ -1034,6 +1312,21 @@ end
 -- Combination logic, inversion, and normalization all happen in shared code above.
 local function BuffTriggerHandler(self, aura, trigger)
   local state = self:ScanAura(trigger.unit or "player", trigger.auraName, false)
+  local tracked = nil
+  if trigger.sourceFilter == "player" then
+    tracked = self:GetTrackedBuff(trigger.unit or "player", trigger.auraName)
+    state.active = state.active and tracked ~= nil
+    if tracked then
+      state.source = tracked.source or UnitName("player") or "player"
+      state.name = state.name or tracked.name or trigger.auraName
+      state.label = state.label or tracked.name or trigger.auraName
+    end
+  elseif trigger.sourceFilter == "other" then
+    tracked = self:GetTrackedBuff(trigger.unit or "player", trigger.auraName)
+    if tracked then
+      state.active = false
+    end
+  end
   return self:ApplyEstimatedDuration(aura, state)
 end
 
@@ -1339,6 +1632,35 @@ local function ItemCooldownTriggerHandler(self, _, trigger)
     name = label,
     label = label,
     icon = info.icon,
+    value = info.remaining,
+    maxValue = info.duration or 0,
+    percent = info.duration and info.duration > 0 and math.floor((info.remaining / info.duration) * 100) or 0,
+    startTime = info.duration and info.expirationTime and (info.expirationTime - info.duration) or nil,
+    duration = info.duration,
+    expirationTime = info.expirationTime,
+  }
+end
+
+local function BagItemCooldownTriggerHandler(self, _, trigger)
+  local info = self:GetBagItemCooldownInfo(trigger.itemName)
+  local label = trigger.itemName ~= "" and trigger.itemName or "Bag Item"
+  local active
+  if not info then
+    return { active = false, label = label }
+  end
+
+  if trigger.cooldownState == "cooldown" then
+    active = not info.ready and CompareValue(info.remaining, trigger.operator or ">=", trigger.threshold or 0)
+  else
+    active = info.ready
+  end
+
+  return {
+    active = active and true or false,
+    name = info.name,
+    label = label,
+    icon = info.icon,
+    stacks = info.count or 1,
     value = info.remaining,
     maxValue = info.duration or 0,
     percent = info.duration and info.duration > 0 and math.floor((info.remaining / info.duration) * 100) or 0,
@@ -1670,6 +1992,7 @@ function TwAuras:RecordCombatLog(chatEvent, message)
   end
 
   self:TrackPlayerDebuffsFromCombatLog(message)
+  self:TrackPlayerBuffsFromCombatLog(message)
   if self:AnyAuraUsesEstimatedHealthTokens() then
     self:TrackTargetHealthEstimateFromCombatLog(message)
   end
@@ -1691,9 +2014,13 @@ function TwAuras:RecordCombatLog(chatEvent, message)
   local i
   for i = 1, table.getn(auras) do
     local aura = auras[i]
+    local shouldRefreshUnitFrames = false
     local j
     for j = 1, table.getn(aura.triggers or {}) do
       local trigger = aura.triggers[j]
+      if aura.regionType == "unitframes" and self:IsFrameUnitTrigger(trigger) then
+        shouldRefreshUnitFrames = true
+      end
       if trigger and trigger.type == "combatlog" then
         local wantedEvent = string.upper(trigger.combatLogEvent or "ANY")
         local pattern = trigger.combatLogPattern or ""
@@ -1760,6 +2087,9 @@ function TwAuras:RecordCombatLog(chatEvent, message)
         end
       end
     end
+    if shouldRefreshUnitFrames then
+      self:RefreshAura(aura)
+    end
   end
 end
 
@@ -1770,8 +2100,13 @@ TwAuras:RegisterTriggerType("buff", {
   handler = BuffTriggerHandler,
   events = {"auras", "world"},
   fields = {
-    { key = "unit", label = "Unit", type = "select", width = 110, default = "player", options = {"player", "target", "targettarget", "pet", "focus"} },
+    { key = "unit", label = "Unit", type = "select", width = 110, default = "player", options = {"player", "target", "targettarget", "pet", "focus", "partyunit"} },
     { key = "auraName", label = "Aura / Spell", type = "text", width = 180, default = "" },
+    { key = "sourceFilter", label = "Source", type = "select", width = 100, default = "any", options = {
+      { value = "any", label = "Any Source" },
+      { value = "player", label = "Cast By Player" },
+      { value = "other", label = "Cast By Others" },
+    } },
     { key = "duration", label = "Duration", type = "number", width = 70, default = 0, help = "Estimated timer seconds" },
     { key = "trackMissing", label = "Track Missing Aura", type = "bool", default = false },
     { key = "invert", label = "Invert Result", type = "bool", default = false },
@@ -1783,7 +2118,7 @@ TwAuras:RegisterTriggerType("debuff", {
   handler = DebuffTriggerHandler,
   events = {"auras", "target", "world"},
   fields = {
-    { key = "unit", label = "Unit", type = "select", width = 110, default = "target", options = {"target", "targettarget", "player", "pet", "focus"} },
+    { key = "unit", label = "Unit", type = "select", width = 110, default = "target", options = {"target", "targettarget", "player", "pet", "focus", "partyunit"} },
     { key = "auraName", label = "Aura / Spell", type = "text", width = 180, default = "" },
     { key = "sourceFilter", label = "Source", type = "select", width = 100, default = "any", options = {
       { value = "any", label = "Any Source" },
@@ -1827,7 +2162,7 @@ TwAuras:RegisterTriggerType("health", {
   handler = HealthTriggerHandler,
   events = {"health", "world"},
   fields = {
-    { key = "unit", label = "Unit", type = "select", width = 110, default = "player", options = {"player", "target", "targettarget", "pet", "focus"} },
+    { key = "unit", label = "Unit", type = "select", width = 110, default = "player", options = {"player", "target", "targettarget", "pet", "focus", "partyunit"} },
     { key = "operator", label = "Operator", type = "select", width = 70, default = ">=", options = {"<", "<=", ">", ">=", "="} },
     { key = "threshold", label = "Threshold", type = "number", width = 70, default = 0 },
     { key = "valueMode", label = "Value Mode", type = "select", width = 90, default = "absolute", options = {"absolute", "percent"} },
@@ -1986,12 +2321,29 @@ TwAuras:RegisterTriggerType("itemcooldown", {
   events = {"cooldown", "world"},
   fields = {
     { key = "itemSlot", label = "Inventory Slot", type = "select", width = 130, default = 13, options = {
+      { value = 1, label = "Head / Helmet (1)" },
+      { value = 2, label = "Neck / Necklace (2)" },
+      { value = 8, label = "Feet / Boots (8)" },
       { value = 13, label = "Top Trinket (13)" },
       { value = 14, label = "Bottom Trinket (14)" },
+      { value = 15, label = "Back / Cloak (15)" },
       { value = 16, label = "Main Hand (16)" },
       { value = 17, label = "Off Hand (17)" },
       { value = 18, label = "Ranged / Relic (18)" },
     } },
+    { key = "cooldownState", label = "State", type = "select", width = 90, default = "ready", options = {"ready", "cooldown"} },
+    { key = "operator", label = "Operator", type = "select", width = 70, default = ">=", options = {"<", "<=", ">", ">=", "="} },
+    { key = "threshold", label = "Threshold", type = "number", width = 70, default = 0, help = "Seconds remaining when using cooldown state" },
+    { key = "invert", label = "Invert Result", type = "bool", default = false },
+  },
+})
+
+TwAuras:RegisterTriggerType("bagitemcooldown", {
+  displayName = "Bag Item Cooldown",
+  handler = BagItemCooldownTriggerHandler,
+  events = {"inventory", "cooldown", "world"},
+  fields = {
+    { key = "itemName", label = "Item Name", type = "text", width = 180, default = "" },
     { key = "cooldownState", label = "State", type = "select", width = 90, default = "ready", options = {"ready", "cooldown"} },
     { key = "operator", label = "Operator", type = "select", width = 70, default = ">=", options = {"<", "<=", ">", ">=", "="} },
     { key = "threshold", label = "Threshold", type = "number", width = 70, default = 0, help = "Seconds remaining when using cooldown state" },
@@ -2098,8 +2450,12 @@ TwAuras:RegisterTriggerType("itemequipped", {
     { key = "itemName", label = "Item Name", type = "text", width = 180, default = "" },
     { key = "equipmentSlot", label = "Slot", type = "select", width = 120, default = "any", options = {
       { value = "any", label = "Any Equipped Slot" },
+      { value = "1", label = "Head / Helmet (1)" },
+      { value = "2", label = "Neck / Necklace (2)" },
+      { value = "8", label = "Feet / Boots (8)" },
       { value = "13", label = "Top Trinket (13)" },
       { value = "14", label = "Bottom Trinket (14)" },
+      { value = "15", label = "Back / Cloak (15)" },
       { value = "16", label = "Main Hand (16)" },
       { value = "17", label = "Off Hand (17)" },
       { value = "18", label = "Ranged / Relic (18)" },

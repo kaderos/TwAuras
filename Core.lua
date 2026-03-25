@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.29
+-- TwAuras file version: 0.1.36
 -- Shared table helpers keep saved variables compatible as defaults evolve.
 local function CopyDefaults(src, dst)
   if type(src) ~= "table" then
@@ -29,6 +29,18 @@ end
 
 local function NormalizeBool(value)
   return value and true or false
+end
+
+local function DeepCopy(value)
+  if type(value) ~= "table" then
+    return value
+  end
+  local copy = {}
+  local key
+  for key in pairs(value) do
+    copy[key] = DeepCopy(value[key])
+  end
+  return copy
 end
 
 local function CompareConditionValue(value, op, threshold)
@@ -480,6 +492,134 @@ function TwAuras:BuildAuraRecordKey(id)
   return "aura_" .. tostring(id or 0)
 end
 
+function TwAuras:GetUniqueAuraName(name)
+  local auras = self:GetAuraList()
+  local wanted = name or "New Aura"
+  local base = string.gsub(wanted, "%d+$", "")
+  local maxSuffix = 0
+  local hasBase = false
+  local i
+  if base == "" then
+    base = wanted
+  end
+  for i = 1, table.getn(auras) do
+    local auraName = auras[i].name or ""
+    if auraName == base then
+      hasBase = true
+    end
+    local suffix = string.match(auraName, "^" .. string.gsub(base, "([^%w])", "%%%1") .. "(%d+)$")
+    if suffix and tonumber(suffix) and tonumber(suffix) > maxSuffix then
+      maxSuffix = tonumber(suffix)
+    end
+  end
+  if not hasBase and maxSuffix == 0 then
+    return base
+  end
+  return base .. tostring(maxSuffix + 1)
+end
+
+function TwAuras:DuplicateAuraRecord(aura)
+  local copy
+  if not aura then
+    return nil
+  end
+  copy = DeepCopy(aura)
+  copy.id = self.db.nextId or 1
+  self.db.nextId = copy.id + 1
+  copy.key = self:BuildAuraRecordKey(copy.id)
+  copy.schemaVersion = tonumber(copy.schemaVersion) or 1
+  copy.name = self:GetUniqueAuraName(aura.name or ("Aura " .. tostring(copy.id)))
+  copy.__state = nil
+  copy.__triggerStates = nil
+  copy.__unitStates = nil
+  return copy
+end
+
+function TwAuras:GetActiveRuntimeTimerCount()
+  local total = 0
+  local now = GetTime()
+  local key
+  for key, timer in pairs(self.runtime and self.runtime.timers or {}) do
+    if timer
+      and timer.expirationTime
+      and timer.expirationTime > now
+      and (timer.duration or 0) > 0 then
+      total = total + 1
+    end
+  end
+  return total
+end
+
+function TwAuras:GetTrackedRuntimeEntryCount(entries)
+  local total = 0
+  local now = GetTime()
+  local key
+  for key, entry in pairs(entries or {}) do
+    if entry then
+      if entry.expirationTime then
+        if entry.expirationTime > now then
+          total = total + 1
+        end
+      elseif next(entry) ~= nil then
+        total = total + 1
+      else
+        -- Empty placeholder tables should not inflate the debug object summary.
+      end
+    end
+  end
+  return total
+end
+
+function TwAuras:GetActiveOverlayCount()
+  local total = 0
+  local auras = self:GetAuraList()
+  local i
+  for i = 1, table.getn(auras) do
+    local aura = auras[i]
+    if aura.__unitStates then
+      total = total + table.getn(aura.__unitStates)
+    end
+  end
+  return total
+end
+
+function TwAuras:GetObjectSummaryCount()
+  local total = 0
+  local auras = self:GetAuraList()
+  local i
+  local j
+  for i = 1, table.getn(auras) do
+    local aura = auras[i]
+    total = total + 1
+    for j = 1, table.getn(aura.triggers or {}) do
+      if aura.triggers[j] and aura.triggers[j].type ~= "none" then
+        total = total + 1
+      end
+    end
+    total = total + table.getn(aura.conditions or {})
+  end
+
+  for i in pairs(self.regions or {}) do
+    total = total + 1
+  end
+
+  total = total + self:GetActiveRuntimeTimerCount()
+  total = total + self:GetTrackedRuntimeEntryCount(self.runtime and self.runtime.trackedBuffs or nil)
+  total = total + self:GetTrackedRuntimeEntryCount(self.runtime and self.runtime.trackedDebuffs or nil)
+  total = total + self:GetActiveOverlayCount()
+
+  return total
+end
+
+function TwAuras:RefreshDebugObjectDisplays()
+  if self.configFrame and self.configFrame:IsShown() and self.RefreshObjectSummary then
+    self:RefreshObjectSummary()
+  end
+  if self.RefreshObjectTracker then
+    self:RefreshObjectTracker()
+  end
+end
+
 function TwAuras:MigrateAuraStore()
   local store = self:GetAuraStore()
   local legacy = self.db and self.db.auras or nil
@@ -635,6 +775,9 @@ function TwAuras:NormalizeAuraConfig(aura)
       trigger.type = "none"
     end
     trigger.unit = SafeLower(trigger.unit or "player")
+    if trigger.unit == "frameunit" then
+      trigger.unit = "partyunit"
+    end
     trigger.sourceUnit = SafeLower(trigger.sourceUnit or "player")
     trigger.sourceFilter = SafeLower(trigger.sourceFilter or "any")
     if trigger.sourceUnit ~= "player" and trigger.sourceUnit ~= "target" then
@@ -775,6 +918,10 @@ function TwAuras:NormalizeAuraConfig(aura)
   if aura.display.fillDirection ~= "ltr" and aura.display.fillDirection ~= "rtl" then
     aura.display.fillDirection = "ltr"
   end
+  aura.display.barIconPosition = SafeLower(aura.display.barIconPosition or "front")
+  if aura.display.barIconPosition ~= "front" and aura.display.barIconPosition ~= "back" then
+    aura.display.barIconPosition = "front"
+  end
   aura.display.strata = string.upper(aura.display.strata or "MEDIUM")
   if aura.display.strata ~= "BACKGROUND"
     and aura.display.strata ~= "LOW"
@@ -794,6 +941,23 @@ function TwAuras:NormalizeAuraConfig(aura)
   aura.display.timerAnchor = string.upper(aura.display.timerAnchor or "TOP")
   aura.display.valueAnchor = string.upper(aura.display.valueAnchor or "RIGHT")
   aura.display.textAnchor = string.upper(aura.display.textAnchor or "CENTER")
+  aura.display.frameScope = SafeLower(aura.display.frameScope or "party")
+  if aura.display.frameScope ~= "party"
+    and aura.display.frameScope ~= "raid"
+    and aura.display.frameScope ~= "both" then
+    aura.display.frameScope = "party"
+  end
+  aura.display.overlayStyle = SafeLower(aura.display.overlayStyle or "icon")
+  if aura.display.overlayStyle ~= "icon" and aura.display.overlayStyle ~= "glow" then
+    aura.display.overlayStyle = "icon"
+  end
+  aura.display.frameAnchor = string.upper(aura.display.frameAnchor or "TOPLEFT")
+  if aura.display.frameAnchor ~= "TOPLEFT"
+    and aura.display.frameAnchor ~= "TOP"
+    and aura.display.frameAnchor ~= "TOPRIGHT" then
+    aura.display.frameAnchor = "TOPLEFT"
+  end
+  aura.display.frameYOffset = tonumber(aura.display.frameYOffset) or 0
   aura.soundActions.startSound = aura.soundActions.startSound or ""
   aura.soundActions.activeSound = aura.soundActions.activeSound or ""
   aura.soundActions.stopSound = aura.soundActions.stopSound or ""
@@ -824,6 +988,146 @@ function TwAuras:NormalizeState(aura, state)
   state.unit = state.unit or (aura and aura.trigger and aura.trigger.unit) or nil
 
   return state
+end
+
+function TwAuras:IsFrameUnitTrigger(trigger)
+  return trigger and SafeLower(trigger.unit or "") == "partyunit"
+end
+
+function TwAuras:AuraUsesFrameUnits(aura)
+  local i
+  for i = 1, table.getn(aura and aura.triggers or {}) do
+    if self:IsFrameUnitTrigger(aura.triggers[i]) then
+      return true
+    end
+  end
+  return false
+end
+
+function TwAuras:GetGroupUnitsForScope(scope)
+  local units = {}
+  local normalized = SafeLower(scope or "party")
+  local i
+  if normalized == "party" or normalized == "both" then
+    for i = 1, (GetNumPartyMembers and (GetNumPartyMembers() or 0) or 0) do
+      if UnitExists("party" .. i) then
+        table.insert(units, "party" .. i)
+      end
+    end
+  end
+  if normalized == "raid" or normalized == "both" then
+    for i = 1, (GetNumRaidMembers and (GetNumRaidMembers() or 0) or 0) do
+      if UnitExists("raid" .. i) then
+        table.insert(units, "raid" .. i)
+      end
+    end
+  end
+  return units
+end
+
+function TwAuras:GetEffectiveTrigger(trigger, unitOverride)
+  local copy
+  local key
+  if not unitOverride or not self:IsFrameUnitTrigger(trigger) then
+    return trigger
+  end
+  copy = {}
+  for key in pairs(trigger) do
+    copy[key] = trigger[key]
+  end
+  copy.unit = unitOverride
+  return copy
+end
+
+function TwAuras:EvaluateTriggerForUnit(aura, unit)
+  local triggers = aura and aura.triggers or nil
+  local mode
+  local aggregateState = nil
+  local activeCount = 0
+  local relevantCount = 0
+  local firstActiveState = nil
+  local i
+  if not triggers or table.getn(triggers) == 0 then
+    return { active = false, unit = unit }
+  end
+
+  mode = aura.triggerMode or "all"
+  for i = 1, table.getn(triggers) do
+    local trigger = triggers[i]
+    if trigger and trigger.type ~= "none" then
+      local effectiveTrigger = self:GetEffectiveTrigger(trigger, unit)
+      local state
+      relevantCount = relevantCount + 1
+      aura.trigger = effectiveTrigger
+      state = self:EvaluateSingleTrigger(aura, effectiveTrigger)
+      if state then
+        state.unit = state.unit or unit
+      end
+      if state and state.active then
+        activeCount = activeCount + 1
+        if not firstActiveState then
+          firstActiveState = state
+        end
+      elseif not aggregateState then
+        aggregateState = state
+      end
+    end
+  end
+
+  aura.trigger = triggers[1]
+  if relevantCount == 0 then
+    return { active = false, unit = unit }
+  end
+
+  if mode == "priority" then
+    if firstActiveState then
+      aggregateState = firstActiveState
+      aggregateState.active = true
+    else
+      aggregateState = aggregateState or { active = false }
+      aggregateState.active = false
+    end
+  elseif mode == "all" then
+    aggregateState = firstActiveState or aggregateState or { active = false }
+    aggregateState.active = activeCount == relevantCount
+  else
+    aggregateState = firstActiveState or aggregateState or { active = false }
+    aggregateState.active = activeCount > 0
+  end
+
+  aggregateState.unit = aggregateState.unit or unit
+  return aggregateState
+end
+
+function TwAuras:BuildUnitFrameStates(aura)
+  local units = self:GetGroupUnitsForScope(aura and aura.display and aura.display.frameScope or "party")
+  local states = {}
+  local firstActive = nil
+  local i
+  for i = 1, table.getn(units) do
+    local unit = units[i]
+    local normalized = self:ResolveConditionalState(aura, self:NormalizeState(aura, self:EvaluateTriggerForUnit(aura, unit)))
+    normalized.unit = unit
+    if normalized.active then
+      table.insert(states, normalized)
+      if not firstActive then
+        firstActive = normalized
+      end
+    end
+  end
+  return states, firstActive or { active = false }
+end
+
+function TwAuras:BuildPreviewUnitFrameStates(aura)
+  local units = self:GetGroupUnitsForScope(aura and aura.display and aura.display.frameScope or "party")
+  local states = {}
+  local i
+  for i = 1, table.getn(units) do
+    local preview = self:BuildPreviewState(aura)
+    preview.unit = units[i]
+    table.insert(states, preview)
+  end
+  return states
 end
 
 function TwAuras:GetUnitTrackingKey(unit)
@@ -1351,11 +1655,16 @@ function TwAuras:SummarizeTrigger(trigger)
     return ""
   end
 
+  if unit == "partyunit" then
+    unit = "party / raid unit"
+  end
+
   if trigger.type == "buff" then
+    local ownershipText = trigger.sourceFilter == "player" and "my " or ""
     if trigger.trackMissing then
-      return unit .. " missing buff " .. (trigger.auraName or "")
+      return unit .. " missing " .. ownershipText .. "buff " .. (trigger.auraName or "")
     end
-    return unit .. " has buff " .. (trigger.auraName or "")
+    return unit .. " has " .. ownershipText .. "buff " .. (trigger.auraName or "")
   elseif trigger.type == "debuff" then
     local ownershipText = trigger.sourceFilter == "player" and "my " or ""
     if trigger.trackMissing then
@@ -1494,7 +1803,11 @@ function TwAuras:GetAuraSummary(aura, maxLength)
     end
   end
 
-  displayPart = "Show as " .. (aura.regionType or "icon")
+  if aura.regionType == "unitframes" then
+    displayPart = "Show on party / raid frames"
+  else
+    displayPart = "Show as " .. (aura.regionType or "icon")
+  end
   if table.getn(relevant) > 0 then
     triggerPart = table.concat(relevant, modeText)
     summary = displayPart .. " when " .. triggerPart
@@ -1571,6 +1884,11 @@ function TwAuras:GetAuraEventKeys(aura)
     for j = 1, table.getn(triggerKeys or {}) do
       self:AddEventKey(keys, triggerKeys[j])
     end
+  end
+
+  if aura and aura.regionType == "unitframes" and self:AuraUsesFrameUnits(aura) then
+    self:AddEventKey(keys, "group")
+    self:AddEventKey(keys, "combatlog")
   end
 
   return keys
@@ -1698,16 +2016,52 @@ function TwAuras:RefreshAura(aura)
 
   self:NormalizeAuraConfig(aura)
 
+  if region.ApplyUnitStates then
+    if self:IsAuraPreviewing(aura.id) then
+      aura.__unitStates = self:BuildPreviewUnitFrameStates(aura)
+      aura.__state = aura.__unitStates[1] or self:BuildPreviewState(aura)
+      self:ClearAuraAudioState(aura)
+      region:ApplyUnitStates(aura, aura.__unitStates)
+      region:Show()
+      self:RefreshDebugObjectDisplays()
+      return
+    end
+
+    if not aura.enabled or not self:PassesLoad(aura.load) then
+      aura.__unitStates = {}
+      aura.__state = self:NormalizeState(aura, { active = false })
+      region:SetInactive(aura)
+      region:Hide()
+      self:RefreshDebugObjectDisplays()
+      return
+    end
+
+    aura.__unitStates, aura.__state = self:BuildUnitFrameStates(aura)
+    self:HandleAuraSoundState(aura, aura.__state)
+    if table.getn(aura.__unitStates or {}) > 0 then
+      region:ApplyUnitStates(aura, aura.__unitStates)
+      region:Show()
+    else
+      region:SetInactive(aura)
+      region:Hide()
+    end
+    self:RefreshDebugObjectDisplays()
+    return
+  end
+
   if self:IsAuraPreviewing(aura.id) then
     aura.__state = self:BuildPreviewState(aura)
     self:ClearAuraAudioState(aura)
     region:ApplyState(aura, aura.__state)
     region:Show()
+    self:RefreshDebugObjectDisplays()
     return
   end
 
   if not aura.enabled or not self:PassesLoad(aura.load) then
+    aura.__state = self:NormalizeState(aura, { active = false })
     region:Hide()
+    self:RefreshDebugObjectDisplays()
     return
   end
 
@@ -1726,6 +2080,7 @@ function TwAuras:RefreshAura(aura)
       region:Hide()
     end
   end
+  self:RefreshDebugObjectDisplays()
 end
 
 -- Timed refresh helpers keep countdowns smooth without reevaluating every aura each frame.
@@ -1978,6 +2333,9 @@ end
 function TwAuras:OnEvent(eventName, eventUnit)
   -- Event flow stays centralized here so trigger files remain declarative.
   -- Shared runtime snapshots are updated first, then only relevant auras are refreshed.
+  if eventName == "PLAYER_ENTER_COMBAT" or eventName == "PLAYER_LEAVE_COMBAT" then
+    self:HandleCombatConfigState(eventName)
+  end
   if eventName == "VARIABLES_LOADED" then
     self:InitializeDB()
     self.runtime.lastPlayerComboPoints = GetComboPoints("player", "target") or 0

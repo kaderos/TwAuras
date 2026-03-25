@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.8
+-- TwAuras file version: 0.1.9
 local stub = {}
 
 local currentTime = 0
@@ -360,7 +360,15 @@ function stub.install()
     if not item then
       return nil
     end
-    return nil, item.count or 1
+    return item.texture, item.count or 1
+  end
+
+  _G.GetContainerItemCooldown = function(bag, slot)
+    local item = bagContents[bag] and bagContents[bag][slot] or nil
+    if not item then
+      return 0, 0, 0
+    end
+    return item.start or 0, item.duration or 0, item.enabled or 0
   end
 
   _G.CheckInteractDistance = function(unit, distance)

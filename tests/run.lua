@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.20
+-- TwAuras file version: 0.1.30
 local function dirname(path)
   local normalized = string.gsub(path, "\\", "/")
   return string.match(normalized, "^(.*)/[^/]+$") or "."
@@ -21,6 +21,7 @@ dofile(join(addonDir, "TwAuras.lua"))
 dofile(join(addonDir, "Core.lua"))
 dofile(join(addonDir, "Triggers.lua"))
 dofile(join(addonDir, "Regions.lua"))
+dofile(join(addonDir, "Config.lua"))
 
 local tests = {}
 
@@ -45,7 +46,9 @@ local function fresh_runtime()
   -- not leak across assertions.
   TwAuras.runtime.timers = {}
   TwAuras.runtime.recentCombatLog = {}
+  TwAuras.runtime.trackedBuffs = {}
   TwAuras.runtime.trackedDebuffs = {}
+  TwAuras.runtime.pendingBuffCasts = {}
   TwAuras.runtime.pendingDebuffCasts = {}
   TwAuras.runtime.targetHealthEstimates = {}
   TwAuras.runtime.targetManaEstimates = {}
@@ -53,8 +56,12 @@ local function fresh_runtime()
   TwAuras.runtime.playerCast = {}
   TwAuras.runtime.auraAudio = {}
   TwAuras.runtime.previewAuras = {}
+  TwAuras.runtime.previewChoices = {}
   TwAuras.runtime.energyTick = {}
   TwAuras.runtime.manaFiveSecondRule = {}
+  TwAuras.regions = {}
+  TwAuras.configFrame = nil
+  TwAuras.objectTrackerFrame = nil
   stub.set_spellbook({})
   stub.set_unit_buffs("player", {})
   stub.set_unit_debuffs("target", {})
@@ -176,6 +183,61 @@ add_test("debuff trigger can require cast by player", function()
   local trackedState = TwAuras:EvaluateSingleTrigger(aura, aura.trigger)
   assert_true(trackedState.active, "cast by player debuff should activate from tracked player application")
   assert_equal(trackedState.source, "Tester", "cast by player debuff should expose the player as source")
+end)
+
+add_test("buff trigger can require cast by player", function()
+  fresh_runtime()
+  stub.set_time(56)
+  stub.set_unit("party1", {
+    name = "Tank",
+    exists = true,
+    buffs = {
+      { name = "Rejuvenation", texture = "Interface\\Icons\\Spell_Nature_Rejuvenation", count = 1 },
+    },
+  })
+  stub.set_unit("player", { name = "Tester", exists = true })
+
+  local aura = {
+    id = 101,
+    name = "My Rejuv Only",
+    regionType = "icon",
+    triggerMode = "all",
+    triggers = {
+      {
+        __index = 1,
+        type = "buff",
+        unit = "party1",
+        auraName = "Rejuvenation",
+        sourceFilter = "player",
+        duration = 0,
+        trackMissing = false,
+        invert = false,
+      },
+    },
+    display = {
+      iconPath = "",
+    },
+  }
+  aura.trigger = aura.triggers[1]
+
+  local initialState = TwAuras:EvaluateSingleTrigger(aura, aura.trigger)
+  assert_true(not initialState.active, "cast by player buff should not activate without tracked player application")
+
+  TwAuras:StartTrackedBuff("Tank", "Rejuvenation")
+  local trackedState = TwAuras:EvaluateSingleTrigger(aura, aura.trigger)
+  assert_true(trackedState.active, "cast by player buff should activate from tracked player application")
+  assert_equal(trackedState.source, "Tester", "cast by player buff should expose the player as source")
+end)
+
+add_test("combat log can track player-cast buffs for ownership", function()
+  fresh_runtime()
+  stub.set_time(57)
+  stub.set_unit("player", { name = "Tester", exists = true })
+
+  TwAuras:RecordCombatLog("CHAT_MSG_SPELL_SELF_BUFF", "You cast Rejuvenation on Tank.")
+  local direct = TwAuras.runtime.trackedBuffs[TwAuras:GetTrackedBuffKey("Tank", "Rejuvenation")]
+  assert_true(direct ~= nil, "combat log should create a tracked buff record for cast by player ownership")
+  assert_equal(direct.source, "Tester", "tracked buff record should keep the player as source")
 end)
 
 add_test("player aura scan prefers old player buff api with fallback support", function()
@@ -592,6 +654,675 @@ add_test("aura store order drives returned aura list", function()
   assert_equal(auras[2].id, 1, "aura list should respect stored order")
 end)
 
+add_test("duplicate aura record gets a new id and numbered collision-safe name", function()
+  fresh_runtime()
+  TwAuras.db = {
+    nextId = 3,
+    auraStore = {
+      version = 1,
+      order = {1, 2},
+      items = {
+        ["1"] = { id = 1, key = "aura_1", schemaVersion = 1, name = "Rip", triggers = {}, display = {}, load = {}, position = {}, conditions = {}, soundActions = {} },
+        ["2"] = { id = 2, key = "aura_2", schemaVersion = 1, name = "Rip1", triggers = {}, display = {}, load = {}, position = {}, conditions = {}, soundActions = {} },
+      },
+    },
+  }
+
+  local duplicate = TwAuras:DuplicateAuraRecord(TwAuras.db.auraStore.items["1"])
+  assert_equal(duplicate.id, 3, "duplicate should get the next available id")
+  assert_equal(duplicate.key, "aura_3", "duplicate should get a fresh storage key")
+  assert_equal(duplicate.name, "Rip2", "duplicate should pick the next numbered name")
+end)
+
+add_test("object summary counts saved and active runtime objects", function()
+  fresh_runtime()
+  stub.set_time(100)
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {1, 2},
+      items = {
+        ["1"] = {
+          id = 1,
+          key = "aura_1",
+          schemaVersion = 1,
+          name = "Aura One",
+          triggers = {
+            { type = "buff" },
+            { type = "none" },
+          },
+          conditions = {
+            { check = "active" },
+          },
+          display = {},
+          load = {},
+          position = {},
+        },
+        ["2"] = {
+          id = 2,
+          key = "aura_2",
+          schemaVersion = 1,
+          name = "Aura Two",
+          triggers = {
+            { type = "debuff" },
+            { type = "power" },
+          },
+          conditions = {
+            { check = "value" },
+            { check = "percent" },
+          },
+          display = {},
+          load = {},
+          position = {},
+          __unitStates = {
+            { unit = "party1", active = true },
+            { unit = "party2", active = true },
+          },
+        },
+      },
+    },
+  }
+  TwAuras.regions = {
+    [1] = {},
+    [2] = {},
+  }
+  TwAuras.runtime.timers = {
+    one = { duration = 10, expirationTime = 110 },
+    expired = { duration = 5, expirationTime = 99 },
+  }
+  TwAuras.runtime.trackedBuffs = {
+    one = { name = "Rejuvenation", startTime = 100 },
+  }
+  TwAuras.runtime.trackedDebuffs = {
+    one = { name = "Rip", expirationTime = 108 },
+    expired = { name = "Moonfire", expirationTime = 99 },
+  }
+
+  local total = TwAuras:GetObjectSummaryCount()
+  assert_equal(total, 15, "object summary should count auras, triggers, conditions, regions, active timers, tracked entries, and overlays")
+end)
+
+add_test("object summary decreases as runtime objects expire or clear", function()
+  fresh_runtime()
+  stub.set_time(200)
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {1},
+      items = {
+        ["1"] = {
+          id = 1,
+          key = "aura_1",
+          schemaVersion = 1,
+          name = "Aura One",
+          triggers = {
+            { type = "buff" },
+          },
+          conditions = {},
+          display = {},
+          load = {},
+          position = {},
+          __unitStates = {
+            { unit = "party1", active = true },
+          },
+        },
+      },
+    },
+  }
+  TwAuras.regions = {
+    [1] = {},
+  }
+  TwAuras.runtime.timers = {
+    one = { duration = 10, expirationTime = 205 },
+  }
+  TwAuras.runtime.trackedBuffs = {
+    one = { name = "Rejuvenation", startTime = 200 },
+  }
+  TwAuras.runtime.trackedDebuffs = {
+    one = { name = "Rip", expirationTime = 204 },
+  }
+
+  assert_equal(TwAuras:GetObjectSummaryCount(), 7, "initial object summary should include active runtime state")
+
+  stub.set_time(206)
+  TwAuras.db.auraStore.items["1"].__unitStates = {}
+  TwAuras.runtime.trackedBuffs = {}
+  assert_equal(TwAuras:GetObjectSummaryCount(), 3, "expired timers, expired debuffs, cleared buffs, and cleared overlays should drop out of the summary")
+end)
+
+add_test("active runtime timer count ignores expired empty and zero-duration timers", function()
+  fresh_runtime()
+  stub.set_time(300)
+  TwAuras.runtime.timers = {
+    active = { duration = 5, expirationTime = 306 },
+    expired = { duration = 5, expirationTime = 299 },
+    zero = { duration = 0, expirationTime = 310 },
+    missing = {},
+  }
+
+  assert_equal(TwAuras:GetActiveRuntimeTimerCount(), 1, "only active positive-duration timers should count")
+end)
+
+add_test("tracked runtime entry count ignores expired entries but keeps timeless records", function()
+  fresh_runtime()
+  stub.set_time(310)
+
+  local total = TwAuras:GetTrackedRuntimeEntryCount({
+    active = { expirationTime = 315 },
+    expired = { expirationTime = 309 },
+    timeless = { source = "Tester" },
+    empty = {},
+  })
+
+  assert_equal(total, 2, "tracked runtime counts should keep active and timeless entries only")
+end)
+
+add_test("active overlay count sums visible unit states across multiple auras", function()
+  fresh_runtime()
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {1, 2},
+      items = {
+        ["1"] = {
+          id = 1,
+          key = "aura_1",
+          schemaVersion = 1,
+          name = "Party One",
+          triggers = {},
+          conditions = {},
+          display = {},
+          load = {},
+          position = {},
+          __unitStates = {
+            { unit = "party1", active = true },
+            { unit = "party2", active = true },
+          },
+        },
+        ["2"] = {
+          id = 2,
+          key = "aura_2",
+          schemaVersion = 1,
+          name = "Party Two",
+          triggers = {},
+          conditions = {},
+          display = {},
+          load = {},
+          position = {},
+          __unitStates = {
+            { unit = "party3", active = true },
+          },
+        },
+      },
+    },
+  }
+
+  assert_equal(TwAuras:GetActiveOverlayCount(), 3, "overlay count should sum per-aura unit frame states")
+end)
+
+add_test("refresh aura updates object summary text while config is open", function()
+  fresh_runtime()
+  local objectText = nil
+  local aura = {
+    id = 720,
+    key = "aura_720",
+    schemaVersion = 1,
+    name = "Summary Refresh",
+    enabled = true,
+    regionType = "icon",
+    triggerMode = "all",
+    triggers = {
+      { __index = 1, type = "always" },
+    },
+    conditions = {},
+    display = {
+      width = 32,
+      height = 32,
+      alpha = 1,
+      iconPath = "Interface\\Icons\\INV_Misc_QuestionMark",
+      color = {1, 1, 1, 1},
+      bgColor = {0, 0, 0, 0.5},
+      textColor = {1, 1, 1, 1},
+      lowTimeTextColor = {1, 0.2, 0.2, 1},
+      lowTimeBarColor = {1, 0.2, 0.2, 1},
+      fontSize = 12,
+      outline = "NONE",
+      strata = "MEDIUM",
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+  }
+
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {720},
+      items = {
+        ["720"] = aura,
+      },
+    },
+  }
+  TwAuras.regions = {
+    [720] = {
+      ApplyState = function() end,
+      Show = function() end,
+      Hide = function() end,
+      SetInactive = function() end,
+    },
+  }
+  local originalRefreshObjectSummary = TwAuras.RefreshObjectSummary
+  TwAuras.configFrame = {
+    IsShown = function()
+      return true
+    end,
+    objectSummaryText = {
+      SetText = function(_, text)
+        objectText = text
+      end,
+    },
+  }
+  TwAuras.RefreshObjectSummary = function(self)
+    self.configFrame.objectSummaryText:SetText("Objects: " .. tostring(self:GetObjectSummaryCount()))
+  end
+
+  TwAuras:RefreshAura(aura)
+  TwAuras.RefreshObjectSummary = originalRefreshObjectSummary
+  assert_equal(objectText, "Objects: 3", "refreshing a visible aura should update the footer summary text")
+end)
+
+add_test("disabled unitframe auras clear stale overlay objects from the summary", function()
+  fresh_runtime()
+  local objectText = nil
+  local aura = {
+    id = 721,
+    key = "aura_721",
+    schemaVersion = 1,
+    name = "Disabled Party Overlay",
+    enabled = false,
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      { __index = 1, type = "buff", unit = "partyunit", auraName = "Rejuvenation" },
+    },
+    conditions = {},
+    display = {
+      frameScope = "party",
+      overlayStyle = "icon",
+      width = 16,
+      height = 16,
+      alpha = 1,
+      color = {1, 1, 1, 1},
+      bgColor = {0, 0, 0, 0.5},
+      textColor = {1, 1, 1, 1},
+      glowColor = {1, 0, 0, 1},
+      lowTimeTextColor = {1, 0.2, 0.2, 1},
+      lowTimeBarColor = {1, 0.2, 0.2, 1},
+      strata = "MEDIUM",
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+    __unitStates = {
+      { unit = "party1", active = true },
+      { unit = "party2", active = true },
+    },
+  }
+
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {721},
+      items = {
+        ["721"] = aura,
+      },
+    },
+  }
+  TwAuras.regions = {
+    [721] = {
+      ApplyUnitStates = function() end,
+      Show = function() end,
+      Hide = function() end,
+      SetInactive = function() end,
+    },
+  }
+  local originalRefreshObjectSummary = TwAuras.RefreshObjectSummary
+  TwAuras.configFrame = {
+    IsShown = function()
+      return true
+    end,
+    objectSummaryText = {
+      SetText = function(_, text)
+        objectText = text
+      end,
+    },
+  }
+  TwAuras.RefreshObjectSummary = function(self)
+    self.configFrame.objectSummaryText:SetText("Objects: " .. tostring(self:GetObjectSummaryCount()))
+  end
+
+  TwAuras:RefreshAura(aura)
+  TwAuras.RefreshObjectSummary = originalRefreshObjectSummary
+  assert_equal(table.getn(aura.__unitStates), 0, "disabled unitframe auras should clear stale overlay states")
+  assert_equal(objectText, "Objects: 3", "clearing stale overlays should also refresh the footer summary text")
+end)
+
+add_test("slash command toggles the object tracker instead of the config", function()
+  fresh_runtime()
+  local configToggles = 0
+  local trackerToggles = 0
+  local originalToggleConfig = TwAuras.ToggleConfig
+  local originalToggleObjectTracker = TwAuras.ToggleObjectTracker
+
+  TwAuras.ToggleConfig = function()
+    configToggles = configToggles + 1
+  end
+  TwAuras.ToggleObjectTracker = function()
+    trackerToggles = trackerToggles + 1
+  end
+
+  TwAuras:HandleSlashCommand("obj")
+  TwAuras:HandleSlashCommand("")
+
+  TwAuras.ToggleConfig = originalToggleConfig
+  TwAuras.ToggleObjectTracker = originalToggleObjectTracker
+
+  assert_equal(trackerToggles, 1, "obj slash command should toggle the tracker")
+  assert_equal(configToggles, 1, "empty slash command should still open the config")
+end)
+
+add_test("object tracker toggles and refreshes visible text", function()
+  fresh_runtime()
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {1},
+      items = {
+        ["1"] = {
+          id = 1,
+          key = "aura_1",
+          schemaVersion = 1,
+          name = "Tracker Aura",
+          triggers = {
+            { type = "always" },
+          },
+          conditions = {},
+          display = {},
+          load = {},
+          position = {},
+        },
+      },
+    },
+  }
+  TwAuras.regions = {
+    [1] = {},
+  }
+
+  local shown = false
+  local objectText = nil
+  TwAuras.objectTrackerFrame = {
+    text = {
+      SetText = function(_, text)
+        objectText = text
+      end,
+    },
+    IsShown = function()
+      return shown
+    end,
+    Show = function()
+      shown = true
+    end,
+    Hide = function()
+      shown = false
+    end,
+  }
+
+  TwAuras:ToggleObjectTracker()
+  assert_true(shown, "toggling the tracker on should show the frame")
+  assert_equal(objectText, "Objects: 3", "showing the tracker should immediately refresh its text")
+
+  TwAuras:ToggleObjectTracker()
+  assert_true(not shown, "toggling the tracker again should hide it")
+end)
+
+add_test("refresh aura updates the floating object tracker while visible", function()
+  fresh_runtime()
+  local objectText = nil
+  local aura = {
+    id = 722,
+    key = "aura_722",
+    schemaVersion = 1,
+    name = "Tracker Refresh",
+    enabled = true,
+    regionType = "icon",
+    triggerMode = "all",
+    triggers = {
+      { __index = 1, type = "always" },
+    },
+    conditions = {},
+    display = {
+      width = 32,
+      height = 32,
+      alpha = 1,
+      iconPath = "Interface\\Icons\\INV_Misc_QuestionMark",
+      color = {1, 1, 1, 1},
+      bgColor = {0, 0, 0, 0.5},
+      textColor = {1, 1, 1, 1},
+      lowTimeTextColor = {1, 0.2, 0.2, 1},
+      lowTimeBarColor = {1, 0.2, 0.2, 1},
+      fontSize = 12,
+      outline = "NONE",
+      strata = "MEDIUM",
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+  }
+
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {722},
+      items = {
+        ["722"] = aura,
+      },
+    },
+  }
+  TwAuras.regions = {
+    [722] = {
+      ApplyState = function() end,
+      Show = function() end,
+      Hide = function() end,
+      SetInactive = function() end,
+    },
+  }
+  TwAuras.objectTrackerFrame = {
+    text = {
+      SetText = function(_, text)
+        objectText = text
+      end,
+    },
+    IsShown = function()
+      return true
+    end,
+  }
+
+  TwAuras:RefreshAura(aura)
+  assert_equal(objectText, "Objects: 3", "refreshing an aura should update the floating tracker text when visible")
+end)
+
+add_test("toggle config queues reopen while player is in combat", function()
+  fresh_runtime()
+  local buildCalls = 0
+  local refreshCalls = 0
+  local originalBuildConfigFrame = TwAuras.BuildConfigFrame
+  local originalRefreshConfigUI = TwAuras.RefreshConfigUI
+  stub.set_unit("player", { combat = true })
+  TwAuras.runtime.pendingConfigOpen = nil
+  TwAuras.configFrame = nil
+
+  TwAuras.BuildConfigFrame = function()
+    buildCalls = buildCalls + 1
+  end
+  TwAuras.RefreshConfigUI = function()
+    refreshCalls = refreshCalls + 1
+  end
+
+  TwAuras:ToggleConfig()
+
+  TwAuras.BuildConfigFrame = originalBuildConfigFrame
+  TwAuras.RefreshConfigUI = originalRefreshConfigUI
+
+  assert_true(TwAuras.runtime.pendingConfigOpen, "combat-open request should queue a reopen")
+  assert_equal(buildCalls, 0, "combat-open request should not build the config immediately")
+  assert_equal(refreshCalls, 0, "combat-open request should not refresh the config immediately")
+end)
+
+add_test("entering combat closes the visible config", function()
+  fresh_runtime()
+  local hidden = false
+  TwAuras.configFrame = {
+    IsShown = function()
+      return true
+    end,
+    Hide = function()
+      hidden = true
+    end,
+  }
+
+  TwAuras:HandleCombatConfigState("PLAYER_ENTER_COMBAT")
+  assert_true(hidden, "combat entry should hide the config frame")
+  assert_true(TwAuras.runtime.pendingConfigOpen, "combat-close should queue the config to reopen afterward")
+end)
+
+add_test("leaving combat reopens a queued config request", function()
+  fresh_runtime()
+  local buildCalls = 0
+  local shown = false
+  local refreshed = false
+  local originalBuildConfigFrame = TwAuras.BuildConfigFrame
+  local originalRefreshConfigUI = TwAuras.RefreshConfigUI
+  local originalSetConfigMinimized = TwAuras.SetConfigMinimized
+  TwAuras.runtime.pendingConfigOpen = true
+  TwAuras.configFrame = nil
+
+  TwAuras.BuildConfigFrame = function(self)
+    buildCalls = buildCalls + 1
+    self.configFrame = {
+      Show = function()
+        shown = true
+      end,
+      IsShown = function()
+        return shown
+      end,
+    }
+  end
+  TwAuras.RefreshConfigUI = function()
+    refreshed = true
+  end
+  TwAuras.SetConfigMinimized = function() end
+
+  TwAuras:HandleCombatConfigState("PLAYER_LEAVE_COMBAT")
+
+  TwAuras.BuildConfigFrame = originalBuildConfigFrame
+  TwAuras.RefreshConfigUI = originalRefreshConfigUI
+  TwAuras.SetConfigMinimized = originalSetConfigMinimized
+
+  assert_equal(buildCalls, 1, "leaving combat should build the queued config once")
+  assert_true(shown, "queued config should show after combat")
+  assert_true(refreshed, "queued config should refresh after combat")
+  assert_true(not TwAuras.runtime.pendingConfigOpen, "queued config flag should clear after reopening")
+end)
+
+add_test("config minimize hides editor content but keeps the banner available", function()
+  fresh_runtime()
+  local frame = {
+    minimized = false,
+    tabButtons = {
+      {
+        EnableMouse = function() end,
+        Show = function() end,
+      },
+    },
+    minimizeButton = {
+      Show = function() end,
+      EnableMouse = function() end,
+    },
+    tabs = {
+      display = { Hide = function() end, Show = function() end },
+      trigger = { Hide = function() end, Show = function() end },
+    },
+    leftPanel = {
+      Hide = function(self) self.hidden = true end,
+      Show = function(self) self.hidden = false end,
+      EnableMouse = function(self, flag) self.mouse = flag end,
+    },
+    rightPanel = {
+      SetWidth = function(self, value) self.width = value end,
+      SetHeight = function(self, value) self.height = value end,
+      SetPoint = function(self, _, _, _, x, y) self.x = x self.y = y end,
+      EnableMouse = function(self, flag) self.mouse = flag end,
+    },
+    leftBackground = {
+      Hide = function(self) self.hidden = true end,
+      Show = function(self) self.hidden = false end,
+    },
+    rightBackground = {
+      Hide = function(self) self.hidden = true end,
+      Show = function(self) self.hidden = false end,
+    },
+    title = { Hide = function(self) self.hidden = true end, Show = function(self) self.hidden = false end },
+    editorTitle = { Hide = function(self) self.hidden = true end, Show = function(self) self.hidden = false end },
+    summaryText = { Hide = function(self) self.hidden = true end, Show = function(self) self.hidden = false end },
+    liveUpdateCheck = { Hide = function(self) self.hidden = true end, Show = function(self) self.hidden = false end },
+    applyButton = { Hide = function(self) self.hidden = true end, Show = function(self) self.hidden = false end },
+    closeButton = { Hide = function(self) self.hidden = true end, Show = function(self) self.hidden = false end },
+    debugButton = { Hide = function(self) self.hidden = true end, Show = function(self) self.hidden = false end },
+    unlockButton = { Hide = function(self) self.hidden = true end, Show = function(self) self.hidden = false end },
+    lockButton = { Hide = function(self) self.hidden = true end, Show = function(self) self.hidden = false end },
+    SetWidth = function(self, value) self.width = value end,
+    SetHeight = function(self, value) self.height = value end,
+    SetBackdropColor = function(self, _, _, _, a) self.backdropAlpha = a end,
+  }
+  TwAuras.configFrame = frame
+
+  TwAuras:SetConfigMinimized(true)
+  assert_true(frame.minimized, "config should enter minimized mode")
+  assert_equal(frame.width, 472, "minimized config should collapse to banner width")
+  assert_equal(frame.height, 82, "minimized config should collapse to banner height")
+  assert_true(frame.leftPanel.hidden, "minimized config should hide the aura list")
+  assert_equal(frame.backdropAlpha, 0, "minimized config should make the main window transparent")
+
+  TwAuras:SetConfigMinimized(false)
+  assert_true(not frame.minimized, "config should leave minimized mode")
+  assert_equal(frame.width, 960, "restored config should use the full width again")
+  assert_equal(frame.height, 620, "restored config should use the full height again")
+  assert_true(frame.leftPanel.hidden == false, "restored config should show the aura list again")
+end)
+
+add_test("show config tab restores a minimized config first", function()
+  fresh_runtime()
+  local restored = false
+  TwAuras.configFrame = {
+    minimized = true,
+    tabs = {
+      display = { Show = function() end, Hide = function() end },
+      trigger = { Show = function() end, Hide = function() end },
+    },
+  }
+  local originalSetConfigMinimized = TwAuras.SetConfigMinimized
+  TwAuras.SetConfigMinimized = function(_, flag)
+    restored = (flag == false)
+    TwAuras.configFrame.minimized = false
+  end
+
+  TwAuras:ShowConfigTab("trigger")
+  TwAuras.SetConfigMinimized = originalSetConfigMinimized
+
+  assert_true(restored, "switching tabs should restore the minimized config first")
+  assert_equal(TwAuras.configFrame.currentTab, "trigger", "tab switch should still record the selected tab")
+end)
+
 add_test("aura summary describes triggers and load concisely", function()
   local aura = {
     id = 300,
@@ -928,6 +1659,61 @@ add_test("item count trigger reads bag totals", function()
   assert_equal(state.value, 20, "item count trigger should sum bag stacks")
 end)
 
+add_test("bag item cooldown trigger reads bag cooldowns", function()
+  fresh_runtime()
+  stub.set_time(40)
+  stub.set_bag_items({
+    [0] = {
+      {
+        name = "Major Healthstone",
+        count = 2,
+        texture = "Interface\\Icons\\INV_Stone_04",
+        start = 10,
+        duration = 120,
+        enabled = 1,
+      },
+    },
+  })
+
+  local trigger = {
+    type = "bagitemcooldown",
+    itemName = "Major Healthstone",
+    cooldownState = "cooldown",
+    operator = ">=",
+    threshold = 30,
+  }
+
+  local state = TwAuras:EvaluateSingleTrigger({ name = "Stone Cooldown" }, trigger)
+  assert_true(state.active, "bag item cooldown trigger should detect active bag cooldowns")
+  assert_equal(state.stacks, 2, "bag item cooldown trigger should expose item count")
+  assert_equal(state.icon, "Interface\\Icons\\INV_Stone_04", "bag item cooldown trigger should expose the bag item icon")
+end)
+
+add_test("bag item cooldown trigger can show ready state", function()
+  fresh_runtime()
+  stub.set_bag_items({
+    [0] = {
+      {
+        name = "Healing Potion",
+        count = 1,
+        texture = "Interface\\Icons\\INV_Potion_54",
+        start = 0,
+        duration = 0,
+        enabled = 1,
+      },
+    },
+  })
+
+  local trigger = {
+    type = "bagitemcooldown",
+    itemName = "Healing Potion",
+    cooldownState = "ready",
+  }
+
+  local state = TwAuras:EvaluateSingleTrigger({ name = "Potion Ready" }, trigger)
+  assert_true(state.active, "bag item cooldown trigger should allow ready-state tracking")
+end)
+
 add_test("range trigger can use interact distance", function()
   fresh_runtime()
   stub.set_unit("target", {
@@ -974,6 +1760,70 @@ add_test("group state trigger detects party membership", function()
 
   local state = TwAuras:EvaluateSingleTrigger({ name = "Party" }, trigger)
   assert_true(state.active, "group state trigger should detect party membership")
+end)
+
+add_test("group unit scope lists available party members", function()
+  fresh_runtime()
+  stub.set_group_state({ party = 2, raid = 0 })
+  stub.set_unit("party1", { name = "Tank", exists = true })
+  stub.set_unit("party2", { name = "Healer", exists = true })
+
+  local units = TwAuras:GetGroupUnitsForScope("party")
+  assert_equal(table.getn(units), 2, "party scope should return visible party units")
+  assert_equal(units[1], "party1", "party scope should start with party1")
+  assert_equal(units[2], "party2", "party scope should include party2")
+end)
+
+add_test("unit frame states evaluate partyunit buffs per member", function()
+  fresh_runtime()
+  stub.set_group_state({ party = 2, raid = 0 })
+  stub.set_unit("party1", {
+    name = "Tank",
+    exists = true,
+    buffs = {
+      { name = "Rejuvenation", texture = "Interface\\Icons\\Spell_Nature_Rejuvenation" },
+    },
+  })
+  stub.set_unit("party2", {
+    name = "Healer",
+    exists = true,
+    buffs = {},
+  })
+
+  local aura = {
+    id = "unitframes-test",
+    name = "Party HoTs",
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      {
+        type = "buff",
+        unit = "partyunit",
+        auraName = "Rejuvenation",
+      },
+    },
+    conditions = {},
+    display = {
+      frameScope = "party",
+      overlayStyle = "icon",
+      iconPath = "",
+      width = 16,
+      height = 16,
+      alpha = 1,
+      color = {1, 1, 1, 1},
+      glowColor = {1, 0, 0, 1},
+    },
+    load = {},
+    position = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
+    soundActions = { startSound = "", activeSound = "", stopSound = "", activeInterval = 2 },
+    enabled = true,
+  }
+
+  TwAuras:NormalizeAuraConfig(aura)
+  local states, aggregate = TwAuras:BuildUnitFrameStates(aura)
+  assert_equal(table.getn(states), 1, "only matching party members should create active overlay states")
+  assert_equal(states[1].unit, "party1", "the matching partyunit state should belong to party1")
+  assert_true(aggregate.active, "aggregate state should be active when at least one frame unit matches")
 end)
 
 add_test("energy tick trigger tracks the next predicted tick", function()

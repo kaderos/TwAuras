@@ -1,9 +1,9 @@
 # TwAuras
 
-Addon Version: `0.1.30`  
-Readme Version: `0.1.15`
+Addon Version: `0.1.35`  
+Readme Version: `0.1.20`
 
-TwAuras is a lightweight WeakAuras-style addon for TurtleWoW / WoW 1.12 focused on building configurable icons, bars, and text trackers in game.
+TwAuras is a lightweight WeakAuras-style addon for TurtleWoW / WoW 1.12 focused on building configurable icons, bars, text trackers, and party/raid frame overlays in game.
 
 The project goal is to recreate the core aura-building workflow of WeakAuras without import/export or user-authored custom code. Users should be able to create and manage auras entirely through the in-game UI.
 
@@ -20,7 +20,7 @@ From there, users can:
 
 ## What TwAuras Can Do
 
-- Create aura displays as `icon`, `bar`, or `text`
+- Create aura displays as `icon`, `bar`, `text`, or `party / raid frame` overlays
 - Build auras with multiple triggers
 - Combine triggers with `all`, `any`, or `priority`
 - Track buffs, debuffs, cooldowns, spell casts, resources, combo points, health, combat state, target state, zones, forms, energy ticks, and the mana five-second rule
