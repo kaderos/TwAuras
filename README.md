@@ -1,7 +1,7 @@
 # TwAuras
 
 Addon Version: `0.1.41`  
-Readme Version: `0.1.26`
+Readme Version: `0.1.28`
 
 TwAuras is a lightweight WeakAuras-style addon for TurtleWoW / WoW 1.12 focused on building configurable icons, bars, text trackers, and party/raid frame overlays in game.
 
@@ -218,6 +218,14 @@ TwAuras is designed around the 1.12 client, so some modern WeakAuras behavior is
 Known limitations include:
 
 - no import/export
+
+## TODO
+
+This section tracks planned work for TwAuras. Completed tasks should be checked off here as they land.
+
+- [ ] Track debuff durations by spell rank when different ranks change the duration
+- [ ] Account for player talents when they extend or shorten tracked debuff durations
+- [ ] Experiment with a cleaner always-running combat log parser that raises shared hooks for triggers instead of each trigger stepping on the same log flow, while validating whether it actually saves resources
 - no custom code in the in-game editor
 - no dynamic groups or clone-style grouped displays yet
 - no full modern combat-log payloads
