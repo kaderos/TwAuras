@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.25
+-- TwAuras file version: 0.1.29
 -- Config.lua owns editor-only concerns: aura CRUD, dynamic trigger lists, and descriptor-driven widgets.
 local function SafeLower(value)
   if not value then
@@ -247,6 +247,26 @@ function TwAuras:GetSelectedAura()
   return self:GetAuraById(self.db.selectedAuraId)
 end
 
+function TwAuras:MarkAuraPreviewChoice(auraId)
+  self.runtime.previewChoices = self.runtime.previewChoices or {}
+  self.runtime.previewChoices[auraId] = true
+end
+
+function TwAuras:ClearAuraPreviewChoices()
+  self.runtime.previewChoices = {}
+end
+
+function TwAuras:EnsureSelectedAuraPreview()
+  local aura = self:GetSelectedAura()
+  if not aura then
+    return
+  end
+  self.runtime.previewChoices = self.runtime.previewChoices or {}
+  if not self.runtime.previewChoices[aura.id] then
+    self:SetAuraPreviewState(aura.id, true)
+  end
+end
+
 function TwAuras:CreateAuraTemplate()
   -- This template is intentionally close to the normalized runtime shape so a new aura can be
   -- created, displayed, and edited immediately before the next full normalize pass runs.
@@ -292,6 +312,7 @@ function TwAuras:CreateAuraTemplate()
       lowTimeBarColorEnabled = false,
       lowTimeBarColor = {1, 0.2, 0.2, 1},
       fillDirection = "ltr",
+      strata = "MEDIUM",
       fontSize = 12,
       fontOutline = "",
       labelAnchor = "BOTTOM",
@@ -529,6 +550,11 @@ function TwAuras:BuildDescriptorFieldGroup(parent, prefix, fields, startX, start
       widget.help = MakeLabel(parent, field.help, x, y - 40)
     end
 
+    if field.hoverText and field.hoverText ~= "" and field.type == "text" and widget.control then
+      widget.helpIcon = MakeLabel(parent, "?", x + (field.width or 120) + 8, y - 14)
+      widget.helpIcon:SetTextColor(1, 0.82, 0, 1)
+    end
+
     if field.hoverText and field.hoverText ~= "" then
       AttachHoverTooltip(widget.label, field.hoverText)
       AttachHoverTooltip(widget.control, field.hoverText)
@@ -540,6 +566,7 @@ function TwAuras:BuildDescriptorFieldGroup(parent, prefix, fields, startX, start
       end
       AttachHoverTooltip(widget.valueText, field.hoverText)
       AttachHoverTooltip(widget.preview, field.hoverText)
+      AttachHoverTooltip(widget.helpIcon, field.hoverText)
     end
 
     self:SetDescriptorWidgetValue(widget, field.default)
@@ -794,6 +821,11 @@ function TwAuras:BuildIconPicker()
     edgeSize = 32,
     insets = { left = 11, right = 12, top = 12, bottom = 11 }
   })
+  frame:SetScript("OnHide", function()
+    TwAuras:ClearAuraPreviews()
+    TwAuras:ClearAuraPreviewChoices()
+    TwAuras:RefreshAll()
+  end)
   frame:Hide()
 
   frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -1160,14 +1192,27 @@ function TwAuras:EnsureAuraListRows(parent, wanted)
   local i
   for i = table.getn(rows) + 1, wanted do
     local button = CreateFrame("Button", nil, parent)
-    button:SetWidth(152)
+    button:SetWidth(168)
     button:SetHeight(18)
     button:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((i - 1) * 20))
     button.bg = button:CreateTexture(nil, "BACKGROUND")
     button.bg:SetAllPoints(button)
+    button.previewCheck = CreateFrame("CheckButton", nil, button, "UICheckButtonTemplate")
+    button.previewCheck:SetWidth(18)
+    button.previewCheck:SetHeight(18)
+    button.previewCheck:SetPoint("RIGHT", button, "RIGHT", 0, 0)
+    button.previewCheck:SetScript("OnClick", function()
+      if not this.__auraId then
+        return
+      end
+      TwAuras:MarkAuraPreviewChoice(this.__auraId)
+      TwAuras:SetAuraPreviewState(this.__auraId, this:GetChecked())
+      TwAuras:RefreshAll()
+      TwAuras:RefreshAuraList()
+    end)
     button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     button.text:SetPoint("LEFT", button, "LEFT", 4, 0)
-    button.text:SetWidth(146)
+    button.text:SetWidth(126)
     button.text:SetJustifyH("LEFT")
     button:SetScript("OnClick", function()
       TwAuras.db.selectedAuraId = this.__auraId
@@ -1247,7 +1292,7 @@ function TwAuras:RefreshAuraList()
   end
   local auras = self:GetAuraList()
   self.configFrame.auraRows = self:EnsureAuraListRows(self.configFrame.auraListContent, math.max(1, table.getn(auras)))
-  self.configFrame.auraListContent:SetWidth(152)
+  self.configFrame.auraListContent:SetWidth(168)
   self.configFrame.auraListContent:SetHeight(math.max(1, table.getn(auras) * 20))
   local i
   for i = 1, table.getn(self.configFrame.auraRows) do
@@ -1255,6 +1300,8 @@ function TwAuras:RefreshAuraList()
     local aura = auras[i]
     if aura then
       row.__auraId = aura.id
+      row.previewCheck.__auraId = aura.id
+      row.previewCheck:SetChecked(self:IsAuraPreviewing(aura.id) and true or false)
       row.text:SetText(aura.name .. " - " .. self:GetAuraSummary(aura, 96))
       if self.db.selectedAuraId == aura.id then
         row.bg:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
@@ -1263,8 +1310,11 @@ function TwAuras:RefreshAuraList()
         row.bg:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
         row.bg:SetVertexColor(1, 1, 1, 0.08)
       end
+      row.previewCheck:Show()
       row:Show()
     else
+      row.previewCheck:SetChecked(false)
+      row.previewCheck:Hide()
       row:Hide()
     end
   end
@@ -1464,6 +1514,8 @@ function TwAuras:RefreshConfigUI()
   if not self.configFrame then
     return
   end
+  self:EnsureSelectedAuraPreview()
+  self:RefreshAll()
   self:RefreshAuraList()
   self:RefreshEditorFields()
 end

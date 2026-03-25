@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.20
+-- TwAuras file version: 0.1.24
 -- Trigger evaluation helpers for aura scans, resource checks, and combat log timers.
 local function CompareValue(value, op, threshold)
   if op == "<" then return value < threshold end
@@ -316,6 +316,22 @@ local function TextContains(actual, expected)
   return string.find(SafeLower(actual), wanted, 1, true) ~= nil
 end
 
+local function GetCombatLogSourceText(message)
+  local source = string.match(message, "^(.+) begins to cast ")
+    or string.match(message, "^(.+) begins to perform ")
+    or string.match(message, "^(.+) casts ")
+    or string.match(message, "^(.+) gains ")
+    or string.match(message, "^(.+) is afflicted by ")
+    or string.match(message, "^(.+) suffers ")
+  if source then
+    return source
+  end
+  if string.find(message, "^You ", 1, true) == 1 or string.find(message, "^Your ", 1, true) == 1 then
+    return UnitName("player") or "Player"
+  end
+  return ""
+end
+
 local function ClearRuntimeTimerKeepFlags(timer)
   if not timer then
     return
@@ -327,12 +343,12 @@ local function ClearRuntimeTimerKeepFlags(timer)
   timer.icon = timer.icon or nil
 end
 
-local function StartInternalCooldown(self, runtimeKey, duration, icon, label)
+local function StartInternalCooldown(self, runtimeKey, duration, icon, label, source)
   local timer = self:GetAuraRuntime(runtimeKey)
   if timer.expirationTime and timer.expirationTime > GetTime() then
     return timer
   end
-  self:StartAuraTimer(runtimeKey, duration or 0, icon, label)
+  self:StartAuraTimer(runtimeKey, duration or 0, icon, label, source)
   timer = self:GetAuraRuntime(runtimeKey)
   return timer
 end
@@ -750,12 +766,15 @@ function TwAuras:GetPlayerStateActive(stateName)
       ["shadowmeld"] = true,
     }
     local i = 1
-    while UnitBuff do
-      local texture = UnitBuff("player", i)
-      if not texture then
+    while true do
+      local texture = UnitBuff and UnitBuff("player", i) or nil
+      local name = self:ExtractPlayerBuffAuraName(i, "HELPFUL")
+      if not name and texture then
+        name = self:ExtractTooltipAuraName(GameTooltip.SetUnitBuff, "player", i)
+      end
+      if not texture and not name then
         break
       end
-      local name = self:ExtractTooltipAuraName(GameTooltip.SetUnitBuff, "player", i)
       if stealthBuffs[SafeLower(name)] then
         return true
       end
@@ -792,6 +811,56 @@ function TwAuras:ScanAura(unit, auraName, isDebuff)
   local wanted = SafeLower(auraName)
   if wanted == "" then
     return { active = false }
+  end
+
+  if unit == "player" then
+    local playerFilter = isDebuff and "HARMFUL" or "HELPFUL"
+    local i = 1
+    while true do
+      local texture, count, spellId
+      local name = self:ExtractPlayerBuffAuraName(i, playerFilter)
+      if isDebuff then
+        texture, count, spellId = UnitDebuff and UnitDebuff(unit, i) or nil, nil, nil
+        if texture then
+          local debuffTexture, debuffCount, debuffSpellId = UnitDebuff(unit, i)
+          texture = debuffTexture
+          count = debuffCount
+          spellId = debuffSpellId
+        end
+      else
+        texture, count, spellId = UnitBuff and UnitBuff(unit, i) or nil, nil, nil
+        if texture then
+          local buffTexture, buffCount, buffSpellId = UnitBuff(unit, i)
+          texture = buffTexture
+          count = buffCount
+          spellId = buffSpellId
+        end
+      end
+      if not name and texture then
+        if isDebuff then
+          name = self:ExtractTooltipAuraName(GameTooltip.SetUnitDebuff, unit, i)
+        else
+          name = self:ExtractTooltipAuraName(GameTooltip.SetUnitBuff, unit, i)
+        end
+      end
+      if not name and not texture then
+        break
+      end
+      if SafeLower(name) == wanted then
+        return {
+          active = true,
+          name = name or auraName,
+          icon = texture,
+          stacks = count or 0,
+          value = count or 0,
+          maxValue = count or 0,
+          duration = nil,
+          expirationTime = nil,
+          spellId = spellId,
+        }
+      end
+      i = i + 1
+    end
   end
 
   local i = 1
@@ -981,6 +1050,7 @@ local function DebuffTriggerHandler(self, aura, trigger)
       state.active = true
       state.name = state.name or tracked.name or trigger.auraName
       state.label = tracked.name or trigger.auraName
+      state.source = tracked.source or UnitName("player") or "player"
       state.duration = tracked.duration
       state.expirationTime = tracked.expirationTime
       state.value = state.value or 0
@@ -1010,6 +1080,7 @@ local function DebuffTriggerHandler(self, aura, trigger)
     state.active = true
     state.name = state.name or tracked.name or trigger.auraName
     state.label = tracked.name or trigger.auraName
+    state.source = tracked.source or UnitName("player") or "player"
     state.duration = tracked.duration
     state.expirationTime = tracked.expirationTime
     state.value = state.value or 0
@@ -1037,6 +1108,50 @@ local function HealthTriggerHandler(self, _, trigger)
   return self:EvaluateNumericTrigger(trigger, value, maxValue, "Health")
 end
 
+local function EnergyTickTriggerHandler(self, _, trigger)
+  local info = self:GetEnergyTickInfo()
+  local remaining = info.remaining or 0
+  local isCooling = info.nextTickAt and remaining > 0
+  local active
+  if trigger.tickState == "ready" then
+    active = not isCooling
+  else
+    active = isCooling and CompareValue(remaining, trigger.operator or ">=", trigger.threshold or 0)
+  end
+  return {
+    active = active and true or false,
+    name = "Energy Tick",
+    label = "Energy Tick",
+    duration = isCooling and info.duration or nil,
+    expirationTime = isCooling and info.nextTickAt or nil,
+    value = remaining,
+    maxValue = info.duration or 2,
+    percent = (info.duration and info.duration > 0) and ((remaining / info.duration) * 100) or 0,
+    unit = "player",
+  }
+end
+
+local function ManaRegenTriggerHandler(self, _, trigger)
+  local info = self:GetManaFiveSecondRuleInfo()
+  local active
+  if trigger.ruleState == "outside" then
+    active = not info.active
+  else
+    active = info.active and true or false
+  end
+  return {
+    active = active and true or false,
+    name = "Five Second Rule",
+    label = trigger.ruleState == "outside" and "Mana Regen" or "Five Second Rule",
+    duration = info.active and info.duration or nil,
+    expirationTime = info.active and info.endsAt or nil,
+    value = info.remaining or 0,
+    maxValue = info.duration or 5,
+    percent = (info.duration and info.duration > 0) and (((info.remaining or 0) / info.duration) * 100) or 0,
+    unit = "player",
+  }
+end
+
 local function CombatTriggerHandler()
   return { active = UnitAffectingCombat("player") and true or false, label = "Combat" }
 end
@@ -1061,6 +1176,7 @@ local function CombatLogTriggerHandler(self, aura)
       active = false,
       label = timer.label or aura.name,
       icon = timer.icon,
+      source = timer.source or "",
     }
   end
   return {
@@ -1069,6 +1185,7 @@ local function CombatLogTriggerHandler(self, aura)
     expirationTime = timer.expirationTime,
     icon = timer.icon,
     label = timer.label or aura.name,
+    source = timer.source or "",
   }
 end
 
@@ -1083,6 +1200,7 @@ local function SpellCastTriggerHandler(self, aura, trigger)
       label = timer.label or trigger.spellName or aura.name,
       name = timer.label or trigger.spellName or aura.name,
       icon = timer.icon,
+      source = timer.source or "",
     }
   end
   return {
@@ -1092,6 +1210,7 @@ local function SpellCastTriggerHandler(self, aura, trigger)
     icon = timer.icon,
     label = timer.label or trigger.spellName or aura.name,
     name = timer.label or trigger.spellName or aura.name,
+    source = timer.source or "",
   }
 end
 
@@ -1106,7 +1225,7 @@ local function InternalCooldownTriggerHandler(self, aura, trigger)
   if detectMode ~= "combatlog" then
     procState = self:ScanAura("player", trigger.procName, false)
     if procState.active and not timer.procActive then
-      timer = StartInternalCooldown(self, runtimeKey, trigger.duration or 0, procState.icon or aura.display.iconPath, trigger.procName or aura.name)
+      timer = StartInternalCooldown(self, runtimeKey, trigger.duration or 0, procState.icon or aura.display.iconPath, trigger.procName or aura.name, UnitName("player") or "Player")
     end
     timer.procActive = procState.active and true or false
   end
@@ -1128,6 +1247,7 @@ local function InternalCooldownTriggerHandler(self, aura, trigger)
     name = trigger.procName or aura.name,
     label = trigger.procName or aura.name,
     icon = timer.icon or (procState and procState.icon) or aura.display.iconPath,
+    source = timer.source or "",
     value = cooling and math.max((timer.expirationTime or 0) - GetTime(), 0) or 0,
     maxValue = timer.duration or 0,
     percent = timer.duration and timer.duration > 0 and math.floor((math.max((timer.expirationTime or 0) - GetTime(), 0) / timer.duration) * 100) or 0,
@@ -1579,10 +1699,16 @@ function TwAuras:RecordCombatLog(chatEvent, message)
         local pattern = trigger.combatLogPattern or ""
         local eventMatches = wantedEvent == "ANY" or wantedEvent == string.upper(chatEvent or "")
         local patternMatches = pattern ~= "" and string.find(string.lower(message), string.lower(pattern), 1, true)
-      if eventMatches and patternMatches then
-        self:StartAuraTimer(self:GetTriggerRuntimeKey(aura, trigger), trigger.duration or 0, aura.display.iconPath, aura.name)
-        self:RefreshAura(aura)
-      end
+        if eventMatches and patternMatches then
+          self:StartAuraTimer(
+            self:GetTriggerRuntimeKey(aura, trigger),
+            trigger.duration or 0,
+            aura.display.iconPath,
+            aura.name,
+            GetCombatLogSourceText(message)
+          )
+          self:RefreshAura(aura)
+        end
       elseif trigger and trigger.type == "internalcooldown" then
         local detectMode = SafeLower(trigger.detectMode or "buff")
         local pattern = trigger.combatLogPattern or trigger.procName or ""
@@ -1594,7 +1720,8 @@ function TwAuras:RecordCombatLog(chatEvent, message)
             self:GetTriggerRuntimeKey(aura, trigger),
             trigger.duration or 0,
             aura.display.iconPath,
-            trigger.procName or aura.name
+            trigger.procName or aura.name,
+            GetCombatLogSourceText(message)
           )
           self:RefreshAura(aura)
         end
@@ -1626,7 +1753,8 @@ function TwAuras:RecordCombatLog(chatEvent, message)
             self:GetTriggerRuntimeKey(aura, trigger),
             trigger.duration or 2,
             aura.display.iconPath,
-            trigger.spellName
+            trigger.spellName,
+            GetCombatLogSourceText(message)
           )
           self:RefreshAura(aura)
         end
@@ -1703,6 +1831,34 @@ TwAuras:RegisterTriggerType("health", {
     { key = "operator", label = "Operator", type = "select", width = 70, default = ">=", options = {"<", "<=", ">", ">=", "="} },
     { key = "threshold", label = "Threshold", type = "number", width = 70, default = 0 },
     { key = "valueMode", label = "Value Mode", type = "select", width = 90, default = "absolute", options = {"absolute", "percent"} },
+    { key = "invert", label = "Invert Result", type = "bool", default = false },
+  },
+})
+
+TwAuras:RegisterTriggerType("energytick", {
+  displayName = "Energy Tick",
+  handler = EnergyTickTriggerHandler,
+  events = {"power", "world"},
+  fields = {
+    { key = "tickState", label = "State", type = "select", width = 100, default = "cooldown", options = {
+      { value = "cooldown", label = "Until Next Tick" },
+      { value = "ready", label = "Tick Due" },
+    } },
+    { key = "operator", label = "Operator", type = "select", width = 70, default = ">=", options = {"<", "<=", ">", ">=", "="} },
+    { key = "threshold", label = "Threshold", type = "number", width = 70, default = 0, help = "Seconds remaining when tracking the next tick" },
+    { key = "invert", label = "Invert Result", type = "bool", default = false },
+  },
+})
+
+TwAuras:RegisterTriggerType("manaregen", {
+  displayName = "Mana Regen / FSR",
+  handler = ManaRegenTriggerHandler,
+  events = {"power", "casting", "world"},
+  fields = {
+    { key = "ruleState", label = "State", type = "select", width = 120, default = "inside", options = {
+      { value = "inside", label = "Inside Five Second Rule" },
+      { value = "outside", label = "Outside Five Second Rule" },
+    } },
     { key = "invert", label = "Invert Result", type = "bool", default = false },
   },
 })

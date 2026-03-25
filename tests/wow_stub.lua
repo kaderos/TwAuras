@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.6
+-- TwAuras file version: 0.1.8
 local stub = {}
 
 local currentTime = 0
@@ -108,6 +108,7 @@ local function makeFrame()
   function frame:SetValue() end
   function frame:SetStatusBarTexture() end
   function frame:SetStatusBarColor() end
+  function frame:SetFrameStrata() end
   function frame:SetReverseFill() end
   function frame:SetAlpha() end
   function frame:SetMovable() end
@@ -220,6 +221,21 @@ function stub.install()
       return nil
     end
     return debuff.texture or "Interface\\Icons\\INV_Misc_QuestionMark", debuff.count or 0, debuff.spellId or nil
+  end
+
+  _G.GetPlayerBuff = function(index, filter)
+    local auraList
+    local aura
+    if filter == "HARMFUL" then
+      auraList = ensureUnit("player").debuffs or {}
+    else
+      auraList = ensureUnit("player").buffs or {}
+    end
+    aura = auraList[index]
+    if not aura then
+      return -1
+    end
+    return index
   end
 
   _G.GetSpellName = function(index)
@@ -428,6 +444,12 @@ function stub.install()
   _G.GameTooltip = {
     SetOwner = noop,
     Hide = noop,
+    SetPlayerBuff = function(_, index)
+      local helpful = (ensureUnit("player").buffs or {})[index]
+      local harmful = (ensureUnit("player").debuffs or {})[index]
+      local aura = helpful or harmful
+      tooltipAuraName = aura and aura.name or nil
+    end,
     SetUnitDebuff = function(_, unit, index)
       local debuff = (ensureUnit(unit).debuffs or {})[index]
       tooltipAuraName = debuff and debuff.name or nil

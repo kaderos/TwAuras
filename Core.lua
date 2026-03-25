@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.21
+-- TwAuras file version: 0.1.29
 -- Shared table helpers keep saved variables compatible as defaults evolve.
 local function CopyDefaults(src, dst)
   if type(src) ~= "table" then
@@ -250,6 +250,8 @@ function TwAuras:CreateDefaultTrigger()
     duration = 0,
     cooldownState = "ready",
     actionState = "usable",
+    tickState = "cooldown",
+    ruleState = "inside",
     combatLogEvent = "ANY",
     combatLogPattern = "",
     interactDistance = 3,
@@ -658,6 +660,14 @@ function TwAuras:NormalizeAuraConfig(aura)
       and trigger.cooldownState ~= "outrange" then
       trigger.cooldownState = "ready"
     end
+    trigger.tickState = SafeLower(trigger.tickState or "cooldown")
+    if trigger.tickState ~= "cooldown" and trigger.tickState ~= "ready" then
+      trigger.tickState = "cooldown"
+    end
+    trigger.ruleState = SafeLower(trigger.ruleState or "inside")
+    if trigger.ruleState ~= "inside" and trigger.ruleState ~= "outside" then
+      trigger.ruleState = "inside"
+    end
     trigger.formName = trigger.formName or ""
     trigger.zoneName = trigger.zoneName or ""
     trigger.subZoneName = trigger.subZoneName or ""
@@ -765,6 +775,13 @@ function TwAuras:NormalizeAuraConfig(aura)
   if aura.display.fillDirection ~= "ltr" and aura.display.fillDirection ~= "rtl" then
     aura.display.fillDirection = "ltr"
   end
+  aura.display.strata = string.upper(aura.display.strata or "MEDIUM")
+  if aura.display.strata ~= "BACKGROUND"
+    and aura.display.strata ~= "LOW"
+    and aura.display.strata ~= "MEDIUM"
+    and aura.display.strata ~= "HIGH" then
+    aura.display.strata = "MEDIUM"
+  end
   if aura.display.iconHue < 0 then aura.display.iconHue = 0 end
   if aura.display.iconHue > 360 then aura.display.iconHue = 360 end
   aura.display.iconPath = aura.display.iconPath or ""
@@ -800,6 +817,7 @@ function TwAuras:NormalizeState(aura, state)
   state.value = state.value ~= nil and state.value or 0
   state.maxValue = state.maxValue ~= nil and state.maxValue or 0
   state.percent = tonumber(state.percent) or 0
+  state.startTime = tonumber(state.startTime) or nil
   state.duration = tonumber(state.duration) or nil
   state.expirationTime = tonumber(state.expirationTime) or nil
   state.remaining = state.expirationTime and math.max(state.expirationTime - GetTime(), 0) or 0
@@ -1218,11 +1236,12 @@ function TwAuras:FormatDynamicDisplayText(template, aura, state, now)
   local display = state.display or aura.display or {}
   local label = state.label or aura.name or ""
   local value = state.value ~= nil and tostring(state.value) or ""
-  local maxValue = state.maxValue ~= nil and tostring(state.maxValue) or ""
+  local maxValue = ""
   local percent = state.percent ~= nil and tostring(state.percent) or ""
   local stacks = state.stacks ~= nil and tostring(state.stacks) or ""
   local timeText = state.expirationTime and self:FormatRemainingTime(state.expirationTime, now or GetTime(), display.timerFormat) or ""
   local name = state.name or aura.name or ""
+  local unitText = state.unit or (aura and aura.trigger and aura.trigger.unit) or ""
   local realHealth = nil
   local realHp = ""
   local realMaxHp = ""
@@ -1231,6 +1250,14 @@ function TwAuras:FormatDynamicDisplayText(template, aura, state, now)
   local realManaValue = ""
   local realMaxMana = ""
   local realManaDeficit = ""
+  local source = state.source or self:GetPreferredSourceText(aura, state) or ""
+
+  if state.maxValue ~= nil then
+    maxValue = tostring(state.maxValue)
+  elseif state.duration ~= nil then
+    -- Timer-style triggers can reuse %max as their total duration for simpler templates.
+    maxValue = tostring(state.duration)
+  end
 
   if self:ContainsEstimatedHealthToken(text) then
     realHealth = self:GetPreferredRealHealthValues(state.unit or "target")
@@ -1247,6 +1274,8 @@ function TwAuras:FormatDynamicDisplayText(template, aura, state, now)
 
   text = string.gsub(text, "%%label", label)
   text = string.gsub(text, "%%name", name)
+  text = string.gsub(text, "%%source", source)
+  text = string.gsub(text, "%%unit", unitText)
   text = string.gsub(text, "%%value", value)
   text = string.gsub(text, "%%max", maxValue)
   text = string.gsub(text, "%%percent", percent)
@@ -1260,6 +1289,30 @@ function TwAuras:FormatDynamicDisplayText(template, aura, state, now)
   text = string.gsub(text, "%%realmana", realManaValue)
 
   return text
+end
+
+function TwAuras:GetPreferredSourceText(aura, state)
+  local triggerStates = aura and aura.__triggerStates or nil
+  local i
+  if state and state.source and state.source ~= "" then
+    return state.source
+  end
+  if not triggerStates then
+    return ""
+  end
+  for i = 1, table.getn(triggerStates) do
+    local trigger = aura and aura.triggers and aura.triggers[i] or nil
+    local triggerState = triggerStates[i]
+    if trigger
+      and triggerState
+      and triggerState.active
+      and triggerState.source
+      and triggerState.source ~= ""
+      and (trigger.type == "combatlog" or trigger.type == "spellcast" or trigger.type == "internalcooldown") then
+      return triggerState.source
+    end
+  end
+  return ""
 end
 
 function TwAuras:GetTriggerRuntimeKey(aura, trigger)
@@ -1399,6 +1452,16 @@ function TwAuras:SummarizeTrigger(trigger)
     return "player " .. (trigger.stateName or "mounted")
   elseif trigger.type == "groupstate" then
     return "player in " .. (trigger.groupState or "solo")
+  elseif trigger.type == "energytick" then
+    if trigger.tickState == "ready" then
+      return "energy tick ready"
+    end
+    return "next energy tick " .. op .. " " .. tostring(threshold) .. "s"
+  elseif trigger.type == "manaregen" then
+    if trigger.ruleState == "outside" then
+      return "outside five second rule"
+    end
+    return "inside five second rule"
   elseif trigger.type == "always" then
     return "always"
   end
@@ -1541,7 +1604,7 @@ function TwAuras:GetAuraRuntime(id)
   return self.runtime.timers[id]
 end
 
-function TwAuras:StartAuraTimer(id, duration, icon, label)
+function TwAuras:StartAuraTimer(id, duration, icon, label, source)
   local timer = self:GetAuraRuntime(id)
   local now = GetTime()
   timer.startTime = now
@@ -1549,6 +1612,7 @@ function TwAuras:StartAuraTimer(id, duration, icon, label)
   timer.expirationTime = now + timer.duration
   timer.icon = icon
   timer.label = label
+  timer.source = source or ""
 end
 
 function TwAuras:StopAuraTimer(id)
@@ -1577,6 +1641,25 @@ function TwAuras:ExtractTooltipAuraName(setter, unit, index)
   local name = left and left:GetText() or nil
   GameTooltip:Hide()
   return name
+end
+
+function TwAuras:ExtractPlayerBuffAuraName(index, filter)
+  local buffIndex
+  local left
+  local name
+  if not GameTooltip or not GameTooltip.SetPlayerBuff or not GetPlayerBuff then
+    return nil
+  end
+  buffIndex = GetPlayerBuff(index, filter or "HELPFUL")
+  if buffIndex == nil or buffIndex < 0 then
+    return nil
+  end
+  GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+  GameTooltip:SetPlayerBuff(buffIndex)
+  left = getglobal("GameTooltipTextLeft1")
+  name = left and left:GetText() or nil
+  GameTooltip:Hide()
+  return name, buffIndex
 end
 
 
@@ -1614,6 +1697,14 @@ function TwAuras:RefreshAura(aura)
   end
 
   self:NormalizeAuraConfig(aura)
+
+  if self:IsAuraPreviewing(aura.id) then
+    aura.__state = self:BuildPreviewState(aura)
+    self:ClearAuraAudioState(aura)
+    region:ApplyState(aura, aura.__state)
+    region:Show()
+    return
+  end
 
   if not aura.enabled or not self:PassesLoad(aura.load) then
     region:Hide()
@@ -1673,6 +1764,95 @@ function TwAuras:GetAuraAudioState(aura)
     }
   end
   return self.runtime.auraAudio[aura.id]
+end
+
+function TwAuras:IsAuraPreviewing(auraId)
+  return self.runtime and self.runtime.previewAuras and self.runtime.previewAuras[auraId] and true or false
+end
+
+function TwAuras:SetAuraPreviewState(auraId, enabled)
+  self.runtime.previewAuras = self.runtime.previewAuras or {}
+  if enabled then
+    self.runtime.previewAuras[auraId] = true
+  else
+    self.runtime.previewAuras[auraId] = nil
+  end
+end
+
+function TwAuras:ClearAuraPreviews()
+  self.runtime.previewAuras = {}
+end
+
+function TwAuras:BuildPreviewState(aura)
+  local previewUnit = aura and aura.trigger and aura.trigger.unit or "player"
+  local state = self:NormalizeState(aura, {
+    active = true,
+    name = aura.name,
+    label = aura.name,
+    icon = aura.display and aura.display.iconPath or nil,
+    unit = previewUnit,
+    value = 75,
+    maxValue = 100,
+    percent = 75,
+    stacks = 3,
+    duration = 12,
+    expirationTime = GetTime() + 12,
+  })
+  return self:ResolveConditionalState(aura, state)
+end
+
+function TwAuras:UpdateEnergyTickTracking()
+  local now = GetTime()
+  local info = self.runtime.energyTick or {}
+  local current = UnitMana and UnitMana("player") or 0
+  if info.lastValue ~= nil and current > info.lastValue then
+    info.lastTickAt = now
+    info.nextTickAt = now + 2
+  elseif not info.nextTickAt then
+    info.nextTickAt = now + 2
+  elseif info.nextTickAt < (now - 4) then
+    info.nextTickAt = now + 2
+  end
+  info.lastValue = current
+  self.runtime.energyTick = info
+end
+
+function TwAuras:GetEnergyTickInfo()
+  local info = self.runtime.energyTick or {}
+  local now = GetTime()
+  if not info.nextTickAt then
+    self:UpdateEnergyTickTracking()
+    info = self.runtime.energyTick or {}
+  end
+  return {
+    lastValue = info.lastValue or 0,
+    lastTickAt = info.lastTickAt,
+    nextTickAt = info.nextTickAt,
+    remaining = info.nextTickAt and math.max(info.nextTickAt - now, 0) or 0,
+    duration = 2,
+  }
+end
+
+function TwAuras:UpdateManaFiveSecondRuleTracking()
+  local now = GetTime()
+  local info = self.runtime.manaFiveSecondRule or {}
+  local current = UnitMana and UnitMana("player") or 0
+  if info.lastValue ~= nil and current < info.lastValue then
+    info.endsAt = now + 5
+  end
+  info.lastValue = current
+  self.runtime.manaFiveSecondRule = info
+end
+
+function TwAuras:GetManaFiveSecondRuleInfo()
+  local info = self.runtime.manaFiveSecondRule or {}
+  local now = GetTime()
+  return {
+    endsAt = info.endsAt,
+    remaining = info.endsAt and math.max(info.endsAt - now, 0) or 0,
+    active = info.endsAt and info.endsAt > now or false,
+    duration = 5,
+  }
 end
 
 function TwAuras:ClearAuraAudioState(aura)
@@ -1801,10 +1981,14 @@ function TwAuras:OnEvent(eventName, eventUnit)
   if eventName == "VARIABLES_LOADED" then
     self:InitializeDB()
     self.runtime.lastPlayerComboPoints = GetComboPoints("player", "target") or 0
+    self:UpdateEnergyTickTracking()
+    self:UpdateManaFiveSecondRuleTracking()
     self:InitializeRegions()
     self:RefreshAll()
   elseif eventName == "PLAYER_ENTERING_WORLD" then
     self.runtime.lastPlayerComboPoints = GetComboPoints("player", "target") or 0
+    self:UpdateEnergyTickTracking()
+    self:UpdateManaFiveSecondRuleTracking()
     if self:AnyAuraUsesEstimatedHealthTokens() then
       self:UpdateEstimatedHealthForUnit("target")
     end
@@ -1849,6 +2033,12 @@ function TwAuras:OnEvent(eventName, eventUnit)
       or eventName == "UNIT_PET" then
     if eventName == "PLAYER_TARGET_CHANGED" or eventName == "UNIT_COMBO_POINTS" then
       self.runtime.lastPlayerComboPoints = GetComboPoints("player", "target") or 0
+    end
+    if eventName == "UNIT_ENERGY" and eventUnit == "player" then
+      self:UpdateEnergyTickTracking()
+    end
+    if eventName == "UNIT_MANA" and eventUnit == "player" then
+      self:UpdateManaFiveSecondRuleTracking()
     end
     if eventName == "PLAYER_TARGET_CHANGED"
       or ((eventName == "UNIT_HEALTH" or eventName == "UNIT_MAXHEALTH") and eventUnit == "target") then

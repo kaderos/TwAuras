@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.12
+-- TwAuras file version: 0.1.17
 -- Region helpers handle positioning, coloring, and drag behavior shared by all displays.
 local function SetColor(region, color)
   if not region then
@@ -21,7 +21,28 @@ local function ApplyPoint(frame, pos)
   frame:SetPoint(pos.point or "CENTER", UIParent, pos.relativePoint or "CENTER", pos.x or 0, pos.y or 0)
 end
 
-local TEXT_TOKEN_HELP = "Available tokens: %name %label %time %value %max %percent %stacks %realhp %realmaxhp %realhpdeficit %realmana %realmaxmana %realmanadeficit"
+local function ApplyStrata(frame, display)
+  if frame and frame.SetFrameStrata then
+    frame:SetFrameStrata((display and display.strata) or "MEDIUM")
+  end
+end
+
+local TEXT_TOKEN_HELP =
+  "%name: tracked spell, aura, or proc name.\n" ..
+  "%label: display label chosen by the trigger.\n" ..
+  "%source: source from the first active combat-log trigger.\n" ..
+  "%unit: active unit like player or target.\n" ..
+  "%time: remaining time on the active timer.\n" ..
+  "%value: current numeric value.\n" ..
+  "%max: maximum value, or total timer duration.\n" ..
+  "%percent: current percent value.\n" ..
+  "%stacks: current aura stack count.\n" ..
+  "%realhp: estimated or exact target HP.\n" ..
+  "%realmaxhp: estimated or exact target max HP.\n" ..
+  "%realhpdeficit: missing target HP.\n" ..
+  "%realmana: estimated or exact target mana.\n" ..
+  "%realmaxmana: estimated or exact target max mana.\n" ..
+  "%realmanadeficit: missing target mana."
 
 local function HueToRGB(hue)
   local normalized = (tonumber(hue) or 0) / 60
@@ -51,13 +72,19 @@ end
 
 local function SetCooldownFrameTimer(frame, startTime, duration)
   if not frame then
-    return
+    return false
+  end
+  if not duration or duration <= 0 then
+    return false
   end
   if CooldownFrame_SetTimer then
     CooldownFrame_SetTimer(frame, startTime or 0, duration or 0, 1)
+    return true
   elseif frame.SetCooldown then
     frame:SetCooldown(startTime or 0, duration or 0)
+    return true
   end
+  return false
 end
 
 local function GetAnchorPoint(anchor)
@@ -230,6 +257,7 @@ function TwAuras:CreateIconRegion(aura)
     self:SetWidth(display.width or 36)
     self:SetHeight(display.height or 36)
     ApplyPoint(self, auraObj.position)
+    ApplyStrata(self, display)
     self:SetAlpha(display.alpha or 1)
     ApplyFont(self.timeText, auraObj)
     ApplyFont(self.stackText, auraObj)
@@ -242,8 +270,12 @@ function TwAuras:CreateIconRegion(aura)
     end
     SetColor(self.icon, GetIconTint(display))
     if display.showCooldownSwipe and state.expirationTime and state.duration and state.duration > 0 then
-      self.cooldown:Show()
-      SetCooldownFrameTimer(self.cooldown, state.expirationTime - state.duration, state.duration)
+      local cooldownStart = state.startTime or (state.expirationTime - state.duration)
+      if SetCooldownFrameTimer(self.cooldown, cooldownStart, state.duration) then
+        self.cooldown:Show()
+      else
+        self.cooldown:Hide()
+      end
     else
       self.cooldown:Hide()
     end
@@ -345,6 +377,7 @@ function TwAuras:CreateBarRegion(aura)
     self.icon:SetWidth(self:GetHeight())
     self.icon:SetHeight(self:GetHeight())
     ApplyPoint(self, auraObj.position)
+    ApplyStrata(self, display)
     self:SetAlpha(display.alpha or 1)
     ApplyFont(self.label, auraObj)
     ApplyFont(self.valueText, auraObj)
@@ -445,6 +478,7 @@ function TwAuras:CreateTextRegion(aura)
     self:SetWidth(display.width or 180)
     self:SetHeight(display.height or 24)
     ApplyPoint(self, auraObj.position)
+    ApplyStrata(self, display)
     self:SetAlpha(display.alpha or 1)
     ApplyFont(self.text, auraObj)
     ClearAndSetAnchor(self.text, self, display.textAnchor, 0)
@@ -501,6 +535,7 @@ TwAuras:RegisterRegionType("icon", {
     { key = "iconPath", label = "Icon Path", type = "text", width = 250, default = "", help = "Leave blank to use trigger icon" },
     { key = "width", label = "Width", type = "number", width = 60, default = 36 },
     { key = "height", label = "Height", type = "number", width = 60, default = 36 },
+    { key = "strata", label = "Layer", type = "select", width = 100, default = "MEDIUM", options = {"BACKGROUND", "LOW", "MEDIUM", "HIGH"} },
     { key = "fontSize", label = "Font Size", type = "number", width = 50, default = 12 },
     { key = "fontOutline", label = "Outline", type = "select", width = 100, default = "", options = {
       { value = "", label = "None" }, "OUTLINE", "THICKOUTLINE"
@@ -540,6 +575,7 @@ TwAuras:RegisterRegionType("bar", {
     { key = "iconPath", label = "Icon Path", type = "text", width = 250, default = "", help = "Leave blank to use trigger icon" },
     { key = "width", label = "Width", type = "number", width = 60, default = 180 },
     { key = "height", label = "Height", type = "number", width = 60, default = 18 },
+    { key = "strata", label = "Layer", type = "select", width = 100, default = "MEDIUM", options = {"BACKGROUND", "LOW", "MEDIUM", "HIGH"} },
     { key = "fontSize", label = "Font Size", type = "number", width = 50, default = 12 },
     { key = "fontOutline", label = "Outline", type = "select", width = 100, default = "", options = {
       { value = "", label = "None" }, "OUTLINE", "THICKOUTLINE"
@@ -581,6 +617,7 @@ TwAuras:RegisterRegionType("text", {
     { key = "label", label = "Label", type = "text", width = 180, default = "" },
     { key = "width", label = "Width", type = "number", width = 60, default = 180 },
     { key = "height", label = "Height", type = "number", width = 60, default = 24 },
+    { key = "strata", label = "Layer", type = "select", width = 100, default = "MEDIUM", options = {"BACKGROUND", "LOW", "MEDIUM", "HIGH"} },
     { key = "fontSize", label = "Font Size", type = "number", width = 50, default = 12 },
     { key = "fontOutline", label = "Outline", type = "select", width = 100, default = "", options = {
       { value = "", label = "None" }, "OUTLINE", "THICKOUTLINE"

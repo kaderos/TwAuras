@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.16
+-- TwAuras file version: 0.1.18
 -- Addon bootstrap, defaults, and frame event wiring.
 local addonName = "TwAuras"
 
@@ -21,6 +21,8 @@ TwAuras = {
     targetHealthEstimates = {},
     targetManaEstimates = {},
     auraAudio = {},
+    energyTick = {},
+    manaFiveSecondRule = {},
     lastPlayerComboPoints = 0,
     playerCast = {},
   },
@@ -110,6 +112,7 @@ TwAuras = {
             lowTimeBarColorEnabled = false,
             lowTimeBarColor = {1, 0.2, 0.2, 1},
             fillDirection = "ltr",
+            strata = "MEDIUM",
             fontSize = 12,
             fontOutline = "",
             labelAnchor = "BOTTOM",

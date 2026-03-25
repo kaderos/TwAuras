@@ -1,7 +1,7 @@
 # TwAuras
 
-Addon Version: `0.1.29`  
-Readme Version: `0.1.14`
+Addon Version: `0.1.30`  
+Readme Version: `0.1.15`
 
 TwAuras is a lightweight WeakAuras-style addon for TurtleWoW / WoW 1.12 focused on building configurable icons, bars, and text trackers in game.
 
@@ -23,7 +23,7 @@ From there, users can:
 - Create aura displays as `icon`, `bar`, or `text`
 - Build auras with multiple triggers
 - Combine triggers with `all`, `any`, or `priority`
-- Track buffs, debuffs, cooldowns, spell casts, resources, combo points, health, combat state, target state, zones, forms, and more
+- Track buffs, debuffs, cooldowns, spell casts, resources, combo points, health, combat state, target state, zones, forms, energy ticks, and the mana five-second rule
 - Show dynamic text such as remaining time, stack count, current value, and percentages
 - Customize icon color, bar color, background color, alpha, font size, outline, and text anchors
 - Add conditions that can change colors, alpha, desaturation, and glow when thresholds are met
@@ -39,6 +39,8 @@ TwAuras currently supports these built-in trigger families:
 - `power`
 - `combo`
 - `health`
+- `energytick`
+- `manaregen`
 - `combat`
 - `targetexists`
 - `targethostile`

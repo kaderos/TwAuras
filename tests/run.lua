@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.13
+-- TwAuras file version: 0.1.20
 local function dirname(path)
   local normalized = string.gsub(path, "\\", "/")
   return string.match(normalized, "^(.*)/[^/]+$") or "."
@@ -52,6 +52,9 @@ local function fresh_runtime()
   TwAuras.runtime.lastPlayerComboPoints = 0
   TwAuras.runtime.playerCast = {}
   TwAuras.runtime.auraAudio = {}
+  TwAuras.runtime.previewAuras = {}
+  TwAuras.runtime.energyTick = {}
+  TwAuras.runtime.manaFiveSecondRule = {}
   stub.set_spellbook({})
   stub.set_unit_buffs("player", {})
   stub.set_unit_debuffs("target", {})
@@ -140,6 +143,7 @@ add_test("debuff trigger can require cast by player", function()
   fresh_runtime()
   stub.set_time(55)
   stub.set_unit("target", { name = "Enemy Dummy", exists = true })
+  stub.set_unit("player", { name = "Tester", exists = true })
 
   local aura = {
     id = 100,
@@ -171,6 +175,19 @@ add_test("debuff trigger can require cast by player", function()
   TwAuras:StartTrackedDebuff("Enemy Dummy", "Rip", false)
   local trackedState = TwAuras:EvaluateSingleTrigger(aura, aura.trigger)
   assert_true(trackedState.active, "cast by player debuff should activate from tracked player application")
+  assert_equal(trackedState.source, "Tester", "cast by player debuff should expose the player as source")
+end)
+
+add_test("player aura scan prefers old player buff api with fallback support", function()
+  fresh_runtime()
+  stub.set_unit("player", { name = "Tester", exists = true })
+  stub.set_unit_buffs("player", {
+    { name = "Clearcasting", texture = "Interface\\Icons\\Spell_Shadow_ManaBurn", count = 1 },
+  })
+
+  local state = TwAuras:ScanAura("player", "Clearcasting", false)
+  assert_true(state.active, "player aura scan should find buffs through the old player buff api path")
+  assert_equal(state.name, "Clearcasting", "player aura scan should recover the tooltip aura name")
 end)
 
 add_test("refresh timed auras skips expired inactive states", function()
@@ -622,6 +639,59 @@ add_test("aura summary truncates with ellipsis at max length", function()
   assert_true(string.sub(summary, -3) == "...", "truncated summary should end with ellipsis")
 end)
 
+add_test("source token prefers first active combat log style trigger source", function()
+  local aura = {
+    id = 302,
+    name = "Source Test",
+    triggers = {
+      { type = "combatlog" },
+      { type = "spellcast" },
+    },
+    __triggerStates = {
+      { active = true, source = "Onyxia" },
+      { active = true, source = "Player" },
+    },
+    display = {
+      timerFormat = "smart",
+    },
+  }
+  local rendered = TwAuras:FormatDynamicDisplayText("%source", aura, {
+    label = "Source Test",
+    name = "Source Test",
+    display = aura.display,
+  }, GetTime())
+  assert_equal(rendered, "Onyxia", "source token should use the first active combat log related trigger source")
+end)
+
+add_test("max token falls back to timer duration when no numeric max exists", function()
+  local aura = {
+    id = 303,
+    name = "Duration Max",
+    display = { timerFormat = "seconds" },
+  }
+  local rendered = TwAuras:FormatDynamicDisplayText("%value/%max", aura, {
+    value = 8,
+    duration = 12,
+    expirationTime = GetTime() + 8,
+    display = aura.display,
+  }, GetTime())
+  assert_equal(rendered, "8/12", "max token should reuse timer duration when no numeric max is available")
+end)
+
+add_test("unit token uses the active state unit", function()
+  local aura = {
+    id = 304,
+    name = "Unit Test",
+    trigger = { unit = "target" },
+    display = {},
+  }
+  local rendered = TwAuras:FormatDynamicDisplayText("%unit", aura, {
+    unit = "targettarget",
+    display = aura.display,
+  }, GetTime())
+  assert_equal(rendered, "targettarget", "unit token should render the current state unit")
+end)
+
 add_test("tracked debuff fades clear saved timer", function()
   fresh_runtime()
   stub.set_time(80)
@@ -906,6 +976,50 @@ add_test("group state trigger detects party membership", function()
   assert_true(state.active, "group state trigger should detect party membership")
 end)
 
+add_test("energy tick trigger tracks the next predicted tick", function()
+  fresh_runtime()
+  stub.set_time(100)
+  stub.set_unit("player", { mana = 20, maxMana = 100 })
+  TwAuras:UpdateEnergyTickTracking()
+
+  stub.set_time(101)
+  stub.set_unit("player", { mana = 40, maxMana = 100 })
+  TwAuras:UpdateEnergyTickTracking()
+
+  local trigger = {
+    type = "energytick",
+    tickState = "cooldown",
+    operator = ">=",
+    threshold = 0,
+  }
+
+  local state = TwAuras:EvaluateSingleTrigger({ name = "Energy Tick" }, trigger)
+  assert_true(state.active, "energy tick trigger should be active while waiting for the next tick")
+  assert_equal(state.duration, 2, "energy tick should use a 2 second cadence")
+  assert_equal(state.expirationTime, 103, "energy tick should predict the next tick two seconds after the last gain")
+end)
+
+add_test("mana regen trigger tracks the five second rule after mana spend", function()
+  fresh_runtime()
+  stub.set_time(200)
+  stub.set_unit("player", { mana = 100, maxMana = 100 })
+  TwAuras:UpdateManaFiveSecondRuleTracking()
+
+  stub.set_time(201)
+  stub.set_unit("player", { mana = 80, maxMana = 100 })
+  TwAuras:UpdateManaFiveSecondRuleTracking()
+
+  local trigger = {
+    type = "manaregen",
+    ruleState = "inside",
+  }
+
+  local state = TwAuras:EvaluateSingleTrigger({ name = "Five Second Rule" }, trigger)
+  assert_true(state.active, "mana regen trigger should be active after spending mana")
+  assert_equal(state.duration, 5, "five second rule should last five seconds")
+  assert_equal(state.expirationTime, 206, "five second rule should end five seconds after mana spend")
+end)
+
 add_test("timer formatting supports mmss mode", function()
   local formatted = TwAuras:FormatRemainingTime(125, 0, "mmss")
   assert_equal(formatted, "2:05", "mmss timer formatting should show minutes and padded seconds")
@@ -1029,6 +1143,60 @@ add_test("aura lifecycle sounds play on start loop and stop", function()
   TwAuras:UpdateAuraLoopSounds(GetTime())
   played = stub.get_played_sounds()
   assert_equal(table.getn(played), 3, "stop transition should also prevent any future repeat sounds")
+end)
+
+add_test("preview state forces an aura region visible for layout testing", function()
+  fresh_runtime()
+  stub.set_time(250)
+
+  local shown = false
+  local hidden = false
+  local appliedState = nil
+  local aura = {
+    id = 610,
+    key = "aura_610",
+    schemaVersion = 1,
+    name = "Preview Aura",
+    enabled = false,
+    regionType = "icon",
+    triggerMode = "all",
+    triggers = {
+      { __index = 1, type = "always" },
+    },
+    trigger = { unit = "player" },
+    display = {
+      width = 36,
+      height = 36,
+      alpha = 1,
+      iconPath = "Interface\\Icons\\INV_Misc_QuestionMark",
+      color = {1, 1, 1, 1},
+      bgColor = {0, 0, 0, 0.5},
+      textColor = {1, 1, 1, 1},
+      lowTimeTextColor = {1, 0.2, 0.2, 1},
+      lowTimeBarColor = {1, 0.2, 0.2, 1},
+      fontSize = 12,
+      outline = "NONE",
+      strata = "MEDIUM",
+      timerFormat = "smart",
+    },
+    load = {},
+    position = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
+    conditions = {},
+    soundActions = {},
+  }
+
+  TwAuras.regions[aura.id] = {
+    ApplyState = function(_, _, state) appliedState = state end,
+    Show = function() shown = true end,
+    Hide = function() hidden = true end,
+  }
+
+  TwAuras:SetAuraPreviewState(aura.id, true)
+  TwAuras:RefreshAura(aura)
+
+  assert_true(shown, "previewed aura should be shown even if disabled")
+  assert_true(not hidden, "previewed aura should not be hidden")
+  assert_true(appliedState and appliedState.active, "previewed aura should apply an active preview state")
 end)
 
 local passed = 0
