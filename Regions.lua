@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.11
+-- TwAuras file version: 0.1.12
 -- Region helpers handle positioning, coloring, and drag behavior shared by all displays.
 local function SetColor(region, color)
   if not region then
@@ -148,18 +148,52 @@ local function MakeMovable(frame)
 end
 
 -- Timer formatting stays intentionally compact for icon and bar overlays.
-function TwAuras:FormatRemainingTime(expirationTime, now)
+function TwAuras:FormatRemainingTime(expirationTime, now, formatStyle)
   if not expirationTime then
     return ""
   end
   local remain = expirationTime - now
+  local minutes
+  local seconds
   if remain < 0 then remain = 0 end
+  if formatStyle == "mmss" then
+    minutes = math.floor(remain / 60)
+    seconds = math.floor(math.fmod(remain, 60))
+    return string.format("%d:%02d", minutes, seconds)
+  elseif formatStyle == "seconds" then
+    return string.format("%.0f", remain)
+  elseif formatStyle == "decimal" then
+    return string.format("%.1f", remain)
+  end
   if remain >= 60 then
     return string.format("%dm", math.floor(remain / 60))
   elseif remain >= 10 then
     return string.format("%.0f", remain)
   end
   return string.format("%.1f", remain)
+end
+
+local function ShouldUseLowTimeColor(display, state)
+  return display
+    and state
+    and state.expirationTime
+    and (display.lowTimeThreshold or 0) > 0
+    and (state.remaining or 0) > 0
+    and (state.remaining or 0) <= (display.lowTimeThreshold or 0)
+end
+
+local function GetTimerTextColor(display, state)
+  if ShouldUseLowTimeColor(display, state) and display.lowTimeTextColorEnabled then
+    return display.lowTimeTextColor or display.textColor
+  end
+  return display.textColor
+end
+
+local function GetBarColor(display, state)
+  if ShouldUseLowTimeColor(display, state) and display.lowTimeBarColorEnabled then
+    return display.lowTimeBarColor or display.color
+  end
+  return display.color or {1, 1, 1, 1}
 end
 
 -- Icon regions are the default display type for buffs, debuffs, and timer-style auras.
@@ -245,7 +279,7 @@ function TwAuras:CreateIconRegion(aura)
     if display.showTimerText and state and state.expirationTime then
       local timerText = display.timerText ~= "" and display.timerText or "%time"
       self.timeText:SetText(TwAuras:FormatDynamicDisplayText(timerText, auraObj, state, now))
-      SetColor(self.timeText, display.textColor)
+      SetColor(self.timeText, GetTimerTextColor(display, state))
       self.timeText:Show()
     else
       self.timeText:Hide()
@@ -317,9 +351,12 @@ function TwAuras:CreateBarRegion(aura)
     ClearAndSetAnchor(self.label, self, display.labelAnchor, 4)
     ClearAndSetAnchor(self.valueText, self, display.valueAnchor, 4)
 
-    local color = display.color or {1, 1, 1}
+    local color = GetBarColor(display, state)
     self:SetStatusBarColor(color[1] or 1, color[2] or 1, color[3] or 1, color[4] or 1)
     SetColor(self.bg, display.bgColor or {0, 0, 0, 0.5})
+    if self.SetReverseFill then
+      self:SetReverseFill(display.fillDirection == "rtl")
+    end
     ApplyGlow(self, display)
 
     if display.showIcon and ((display.iconPath ~= "" and display.iconPath) or state.icon) then
@@ -346,7 +383,7 @@ function TwAuras:CreateBarRegion(aura)
     self:SetValue(value)
 
     SetColor(self.label, display.textColor)
-    SetColor(self.valueText, display.textColor)
+    SetColor(self.valueText, GetTimerTextColor(display, state))
 
     if display.showLabelText then
       local labelText = display.labelText ~= "" and display.labelText or (display.label ~= "" and display.label or "%label")
@@ -364,10 +401,12 @@ function TwAuras:CreateBarRegion(aura)
     if display.showTimerText and state and state.expirationTime then
       local timerText = display.timerText ~= "" and display.timerText or "%time"
       self.valueText:SetText(TwAuras:FormatDynamicDisplayText(timerText, auraObj, state, now))
+      SetColor(self.valueText, GetTimerTextColor(display, state))
     elseif state then
       local valueText = display.valueText ~= "" and display.valueText or "%value/%max"
       valueText = TwAuras:FormatDynamicDisplayText(valueText, auraObj, state, now)
       self.valueText:SetText(valueText)
+      SetColor(self.valueText, display.textColor)
     else
       self.valueText:SetText("")
     end
@@ -409,7 +448,7 @@ function TwAuras:CreateTextRegion(aura)
     self:SetAlpha(display.alpha or 1)
     ApplyFont(self.text, auraObj)
     ClearAndSetAnchor(self.text, self, display.textAnchor, 0)
-    SetColor(self.text, display.textColor)
+    SetColor(self.text, GetTimerTextColor(display, state))
     ApplyGlow(self, display)
 
     if display.showTimerText and state.expirationTime then
@@ -429,6 +468,7 @@ function TwAuras:CreateTextRegion(aura)
     if display.showTimerText and state and state.expirationTime then
       local timerText = display.timerText ~= "" and display.timerText or "%label: %time"
       self.text:SetText(TwAuras:FormatDynamicDisplayText(timerText, auraObj, state, now))
+      SetColor(self.text, GetTimerTextColor(display, state))
     end
   end
 
@@ -470,6 +510,9 @@ TwAuras:RegisterRegionType("icon", {
     { key = "textAnchor", label = "Text Anchor", type = "select", width = 90, default = "CENTER", options = {"TOP", "BOTTOM", "LEFT", "RIGHT", "CENTER"} },
     { key = "labelText", label = "Label Text", type = "text", width = 180, default = "%name", hoverText = TEXT_TOKEN_HELP },
     { key = "timerText", label = "Timer Text", type = "text", width = 180, default = "%time", hoverText = TEXT_TOKEN_HELP },
+    { key = "timerFormat", label = "Timer Format", type = "select", width = 100, default = "smart", options = {
+      { value = "smart", label = "Smart" }, { value = "mmss", label = "MM:SS" }, { value = "seconds", label = "Seconds" }, { value = "decimal", label = "Decimal" }
+    } },
     { key = "showLabelText", label = "Show Label", type = "bool", default = false },
     { key = "showTimerText", label = "Show Timer Text", type = "bool", default = true },
     { key = "showStackText", label = "Show Stacks", type = "bool", default = true },
@@ -481,6 +524,9 @@ TwAuras:RegisterRegionType("icon", {
     { key = "iconHue", label = "Icon Hue", type = "hue", width = 126, default = 0, hoverText = "Choose a hue tint for icon textures." },
     { key = "color", label = "Main RGBA", type = "color4", default = {1, 1, 1, 1} },
     { key = "textColor", label = "Text RGBA", type = "color4", default = {1, 1, 1, 1} },
+    { key = "lowTimeThreshold", label = "Low Time Sec", type = "number", width = 60, default = 0 },
+    { key = "lowTimeTextColorEnabled", label = "Low Time Text Color", type = "bool", default = false },
+    { key = "lowTimeTextColor", label = "Low Text RGBA", type = "color4", default = {1, 0.2, 0.2, 1} },
   },
   create = function(self, aura)
     return self:CreateIconRegion(aura)
@@ -503,15 +549,26 @@ TwAuras:RegisterRegionType("bar", {
     { key = "labelText", label = "Label Text", type = "text", width = 180, default = "%label", hoverText = TEXT_TOKEN_HELP },
     { key = "timerText", label = "Timer Text", type = "text", width = 180, default = "%time", hoverText = TEXT_TOKEN_HELP },
     { key = "valueText", label = "Value Text", type = "text", width = 180, default = "%value/%max", hoverText = TEXT_TOKEN_HELP },
+    { key = "timerFormat", label = "Timer Format", type = "select", width = 100, default = "smart", options = {
+      { value = "smart", label = "Smart" }, { value = "mmss", label = "MM:SS" }, { value = "seconds", label = "Seconds" }, { value = "decimal", label = "Decimal" }
+    } },
     { key = "showIcon", label = "Show Icon", type = "bool", default = false },
     { key = "showLabelText", label = "Show Label", type = "bool", default = true },
     { key = "showTimerText", label = "Show Timer Text", type = "bool", default = false },
+    { key = "fillDirection", label = "Fill Direction", type = "select", width = 110, default = "ltr", options = {
+      { value = "ltr", label = "Left To Right" }, { value = "rtl", label = "Right To Left" }
+    } },
     { key = "iconDesaturate", label = "Desaturate Icon", type = "bool", default = false },
     { key = "iconHueEnabled", label = "Enable Icon Hue", type = "bool", default = false },
     { key = "iconHue", label = "Icon Hue", type = "hue", width = 126, default = 0, hoverText = "Choose a hue tint for bar icons." },
     { key = "color", label = "Main RGBA", type = "color4", default = {1, 1, 1, 1} },
     { key = "bgColor", label = "BG RGBA", type = "color4", default = {0, 0, 0, 0.5} },
     { key = "textColor", label = "Text RGBA", type = "color4", default = {1, 1, 1, 1} },
+    { key = "lowTimeThreshold", label = "Low Time Sec", type = "number", width = 60, default = 0 },
+    { key = "lowTimeTextColorEnabled", label = "Low Time Text Color", type = "bool", default = false },
+    { key = "lowTimeTextColor", label = "Low Text RGBA", type = "color4", default = {1, 0.2, 0.2, 1} },
+    { key = "lowTimeBarColorEnabled", label = "Low Time Bar Color", type = "bool", default = false },
+    { key = "lowTimeBarColor", label = "Low Bar RGBA", type = "color4", default = {1, 0.2, 0.2, 1} },
   },
   create = function(self, aura)
     return self:CreateBarRegion(aura)
@@ -532,8 +589,14 @@ TwAuras:RegisterRegionType("text", {
     { key = "labelText", label = "Label Text", type = "text", width = 180, default = "%name", hoverText = TEXT_TOKEN_HELP },
     { key = "timerText", label = "Timer Text", type = "text", width = 180, default = "%label: %time", hoverText = TEXT_TOKEN_HELP },
     { key = "valueText", label = "Value Text", type = "text", width = 180, default = "%label: %value", hoverText = TEXT_TOKEN_HELP },
+    { key = "timerFormat", label = "Timer Format", type = "select", width = 100, default = "smart", options = {
+      { value = "smart", label = "Smart" }, { value = "mmss", label = "MM:SS" }, { value = "seconds", label = "Seconds" }, { value = "decimal", label = "Decimal" }
+    } },
     { key = "showTimerText", label = "Show Timer Text", type = "bool", default = true },
     { key = "textColor", label = "Text RGBA", type = "color4", default = {1, 1, 1, 1} },
+    { key = "lowTimeThreshold", label = "Low Time Sec", type = "number", width = 60, default = 0 },
+    { key = "lowTimeTextColorEnabled", label = "Low Time Text Color", type = "bool", default = false },
+    { key = "lowTimeTextColor", label = "Low Text RGBA", type = "color4", default = {1, 0.2, 0.2, 1} },
   },
   create = function(self, aura)
     return self:CreateTextRegion(aura)

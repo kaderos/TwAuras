@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.15
+-- TwAuras file version: 0.1.16
 -- Addon bootstrap, defaults, and frame event wiring.
 local addonName = "TwAuras"
 
@@ -100,9 +100,16 @@ TwAuras = {
             iconHue = 0,
             showCooldownSwipe = false,
             showCooldownOverlay = false,
+            timerFormat = "smart",
             labelText = "%name",
             timerText = "%time",
             valueText = "%value/%max",
+            lowTimeThreshold = 0,
+            lowTimeTextColorEnabled = false,
+            lowTimeTextColor = {1, 0.2, 0.2, 1},
+            lowTimeBarColorEnabled = false,
+            lowTimeBarColor = {1, 0.2, 0.2, 1},
+            fillDirection = "ltr",
             fontSize = 12,
             fontOutline = "",
             labelAnchor = "BOTTOM",

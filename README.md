@@ -1,7 +1,7 @@
 # TwAuras
 
-Addon Version: `0.1.26`  
-Readme Version: `0.1.11`
+Addon Version: `0.1.29`  
+Readme Version: `0.1.14`
 
 TwAuras is a lightweight WeakAuras-style addon for TurtleWoW / WoW 1.12 focused on building configurable icons, bars, and text trackers in game.
 
@@ -45,6 +45,8 @@ TwAuras currently supports these built-in trigger families:
 - `combatlog`
 - `spellcast`
 - `cooldown`
+- `spellusable`
+- `internalcooldown`
 - `itemcooldown`
 - `form`
 - `casting`
@@ -53,6 +55,7 @@ TwAuras currently supports these built-in trigger families:
 - `spellknown`
 - `actionusable`
 - `weaponenchant`
+- `itemequipped`
 - `itemcount`
 - `range`
 - `threat`
@@ -74,6 +77,12 @@ Current debuff timer support includes:
 - combo-point snapshotting for finisher-style debuffs
 - optional `Cast By Player` source filtering
 - timer display through `%time` and bar/icon timer output
+
+TwAuras also supports internal cooldown tracking for item procs and similar effects:
+
+- start an ICD from a player buff gain
+- or start it from a partial combat log match
+- show the aura while the ICD is cooling down or only when it becomes ready again
 
 ## In-Game Workflow
 
@@ -104,12 +113,14 @@ These create a new aura with sensible defaults so the user can finish setup fast
 TwAuras currently supports:
 
 - icon picker with search and paging
-- sound picker with search and paging
+- sound picker with search, scrolling, and test playback
 - icon path override
 - icon desaturation
 - icon hue picker with live preview
 - icon cooldown swipe overlay
 - icon cooldown dark overlay
+- configurable timer formatting (`smart`, `mm:ss`, `seconds`, `decimal`)
+- low-time text and bar color transitions
 - sound path or sound id support for condition lifecycle audio
 - inactive desaturation
 - main color tint

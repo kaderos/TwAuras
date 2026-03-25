@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.11
+-- TwAuras file version: 0.1.13
 local function dirname(path)
   local normalized = string.gsub(path, "\\", "/")
   return string.match(normalized, "^(.*)/[^/]+$") or "."
@@ -20,6 +20,7 @@ stub.install()
 dofile(join(addonDir, "TwAuras.lua"))
 dofile(join(addonDir, "Core.lua"))
 dofile(join(addonDir, "Triggers.lua"))
+dofile(join(addonDir, "Regions.lua"))
 
 local tests = {}
 
@@ -52,6 +53,8 @@ local function fresh_runtime()
   TwAuras.runtime.playerCast = {}
   TwAuras.runtime.auraAudio = {}
   stub.set_spellbook({})
+  stub.set_unit_buffs("player", {})
+  stub.set_unit_debuffs("target", {})
   stub.set_forms({})
   stub.set_zone("Darnassus", "")
   stub.set_action(1, nil)
@@ -244,6 +247,95 @@ add_test("spellcast trigger matches player cast success text", function()
   local state = TwAuras:EvaluateSingleTrigger(aura, aura.trigger)
   assert_true(state.active, "spellcast trigger should activate from matching cast text")
   assert_equal(state.duration, 2, "spellcast trigger should keep configured duration")
+end)
+
+add_test("internal cooldown starts from player buff gain edge", function()
+  fresh_runtime()
+  stub.set_time(300)
+  local aura = {
+    id = 700,
+    key = "aura_700",
+    schemaVersion = 1,
+    name = "Blackout Truncheon ICD",
+    regionType = "icon",
+    triggerMode = "all",
+    triggers = {
+      {
+        __index = 1,
+        type = "internalcooldown",
+        procName = "Blackout Truncheon",
+        detectMode = "buff",
+        duration = 45,
+        cooldownState = "cooldown",
+      },
+    },
+    display = {
+      iconPath = "",
+    },
+  }
+  aura.trigger = aura.triggers[1]
+
+  stub.set_unit_buffs("player", {
+    { name = "Blackout Truncheon", texture = "Interface\\Icons\\INV_Mace_13", count = 0 },
+  })
+  local state = TwAuras:EvaluateSingleTrigger(aura, aura.trigger)
+  assert_true(state.active, "internal cooldown should start when the player gains the proc buff")
+  assert_equal(state.duration, 45, "internal cooldown should keep configured duration")
+
+  stub.advance_time(5)
+  local laterState = TwAuras:EvaluateSingleTrigger(aura, aura.trigger)
+  assert_true(laterState.active, "internal cooldown should remain active while the timer is running")
+  assert_equal(math.floor(laterState.expirationTime - GetTime()), 40, "internal cooldown should count down over time")
+end)
+
+add_test("internal cooldown can show ready after expiry", function()
+  fresh_runtime()
+  stub.set_time(400)
+  local aura = {
+    id = 701,
+    key = "aura_701",
+    schemaVersion = 1,
+    name = "Proc Ready",
+    regionType = "icon",
+    triggerMode = "all",
+    triggers = {
+      {
+        __index = 1,
+        type = "internalcooldown",
+        procName = "Mystic Proc",
+        detectMode = "combatlog",
+        combatLogPattern = "You gain Mystic Proc.",
+        duration = 10,
+        cooldownState = "ready",
+      },
+    },
+    display = {
+      iconPath = "",
+    },
+  }
+  aura.trigger = aura.triggers[1]
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {701},
+      items = { ["701"] = aura },
+    },
+  }
+  TwAuras.regions = {
+    [701] = {
+      ApplyState = function() end,
+      Show = function() end,
+      Hide = function() end,
+    }
+  }
+
+  TwAuras:RecordCombatLog("CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS", "You gain Mystic Proc.")
+  local coolingState = TwAuras:EvaluateSingleTrigger(aura, aura.trigger)
+  assert_true(not coolingState.active, "ready-mode internal cooldown should be false while cooling")
+
+  stub.advance_time(11)
+  local readyState = TwAuras:EvaluateSingleTrigger(aura, aura.trigger)
+  assert_true(readyState.active, "ready-mode internal cooldown should become true after expiry")
 end)
 
 add_test("target health trigger supports percent mode", function()
@@ -583,6 +675,22 @@ add_test("spell cooldown trigger sees active cooldown", function()
   assert_equal(math.floor(state.value), 5, "cooldown trigger should track remaining seconds")
 end)
 
+add_test("spell usable trigger can match missing resource", function()
+  fresh_runtime()
+  stub.set_spellbook({
+    { name = "Healing Touch", texture = "Interface\\Icons\\Spell_Nature_HealingTouch", usable = false, notEnoughMana = true, inRange = true },
+  })
+
+  local trigger = {
+    type = "spellusable",
+    spellName = "Healing Touch",
+    cooldownState = "missingresource",
+  }
+
+  local state = TwAuras:EvaluateSingleTrigger({ name = "Healing Touch Usable" }, trigger)
+  assert_true(state.active, "spell usable trigger should match missing resource state")
+end)
+
 add_test("form trigger matches active shapeshift form", function()
   fresh_runtime()
   stub.set_forms({
@@ -712,6 +820,23 @@ add_test("weapon enchant trigger detects active main hand enchant", function()
   assert_equal(math.floor(state.value), 120, "weapon enchant trigger should expose remaining seconds")
 end)
 
+add_test("item equipped trigger matches equipped trinket", function()
+  fresh_runtime()
+  stub.set_inventory_item(13, {
+    texture = "Interface\\Icons\\INV_Misc_QuestionMark",
+    link = "|cffFFFFFF|Hitem:0:0:0:0|h[Hand of Justice]|h|r",
+  })
+
+  local trigger = {
+    type = "itemequipped",
+    itemName = "Hand of Justice",
+    equipmentSlot = "13",
+  }
+
+  local state = TwAuras:EvaluateSingleTrigger({ name = "HOJ Equipped" }, trigger)
+  assert_true(state.active, "item equipped trigger should detect matching inventory link")
+end)
+
 add_test("item count trigger reads bag totals", function()
   fresh_runtime()
   stub.set_bag_items({
@@ -779,6 +904,11 @@ add_test("group state trigger detects party membership", function()
 
   local state = TwAuras:EvaluateSingleTrigger({ name = "Party" }, trigger)
   assert_true(state.active, "group state trigger should detect party membership")
+end)
+
+add_test("timer formatting supports mmss mode", function()
+  local formatted = TwAuras:FormatRemainingTime(125, 0, "mmss")
+  assert_equal(formatted, "2:05", "mmss timer formatting should show minutes and padded seconds")
 end)
 
 add_test("combat log skips real hp estimation when no aura uses the tokens", function()

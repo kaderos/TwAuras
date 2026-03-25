@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.19
+-- TwAuras file version: 0.1.21
 -- Shared table helpers keep saved variables compatible as defaults evolve.
 local function CopyDefaults(src, dst)
   if type(src) ~= "table" then
@@ -224,19 +224,23 @@ function TwAuras:CreateDefaultTrigger()
     type = "buff",
     unit = "player",
     auraName = "",
+    procName = "",
     spellName = "",
     formName = "",
     zoneName = "",
     subZoneName = "",
     itemName = "",
+    equipmentSlot = "any",
     stateName = "mounted",
     groupState = "solo",
     weaponHand = "mainhand",
+    enchantState = "active",
     rangeUnit = "target",
     rangeMode = "action",
     rangeState = "inrange",
     threatState = "aggro",
     sourceUnit = "player",
+    detectMode = "buff",
     sourceFilter = "any",
     castPhase = "any",
     castType = "any",
@@ -245,6 +249,7 @@ function TwAuras:CreateDefaultTrigger()
     threshold = 1,
     duration = 0,
     cooldownState = "ready",
+    actionState = "usable",
     combatLogEvent = "ANY",
     combatLogPattern = "",
     interactDistance = 3,
@@ -256,6 +261,7 @@ function TwAuras:CreateDefaultTrigger()
     valueMode = "absolute",
     matchSubZone = false,
     requireReady = true,
+    minCharges = 0,
   }
 end
 
@@ -632,7 +638,7 @@ function TwAuras:NormalizeAuraConfig(aura)
     if trigger.sourceUnit ~= "player" and trigger.sourceUnit ~= "target" then
       trigger.sourceUnit = "player"
     end
-    if trigger.sourceFilter ~= "any" and trigger.sourceFilter ~= "player" then
+    if trigger.sourceFilter ~= "any" and trigger.sourceFilter ~= "player" and trigger.sourceFilter ~= "other" then
       trigger.sourceFilter = "any"
     end
     trigger.castPhase = SafeLower(trigger.castPhase or "any")
@@ -645,7 +651,11 @@ function TwAuras:NormalizeAuraConfig(aura)
     end
     trigger.powerType = SafeLower(trigger.powerType or "energy")
     trigger.cooldownState = SafeLower(trigger.cooldownState or "ready")
-    if trigger.cooldownState ~= "ready" and trigger.cooldownState ~= "cooldown" then
+    if trigger.cooldownState ~= "ready"
+      and trigger.cooldownState ~= "cooldown"
+      and trigger.cooldownState ~= "usable"
+      and trigger.cooldownState ~= "missingresource"
+      and trigger.cooldownState ~= "outrange" then
       trigger.cooldownState = "ready"
     end
     trigger.formName = trigger.formName or ""
@@ -694,6 +704,7 @@ function TwAuras:NormalizeAuraConfig(aura)
     end
     trigger.itemSlot = tonumber(trigger.itemSlot) or 13
     trigger.actionSlot = tonumber(trigger.actionSlot) or 1
+    trigger.minCharges = tonumber(trigger.minCharges) or 0
     trigger.invert = NormalizeBool(trigger.invert)
     trigger.trackMissing = NormalizeBool(trigger.trackMissing)
     trigger.useTrackedTimer = NormalizeBool(trigger.useTrackedTimer ~= false)
@@ -740,6 +751,20 @@ function TwAuras:NormalizeAuraConfig(aura)
   aura.display.iconHue = tonumber(aura.display.iconHue) or 0
   aura.display.showCooldownSwipe = NormalizeBool(aura.display.showCooldownSwipe)
   aura.display.showCooldownOverlay = NormalizeBool(aura.display.showCooldownOverlay)
+  aura.display.timerFormat = SafeLower(aura.display.timerFormat or "smart")
+  if aura.display.timerFormat ~= "smart"
+    and aura.display.timerFormat ~= "mmss"
+    and aura.display.timerFormat ~= "seconds"
+    and aura.display.timerFormat ~= "decimal" then
+    aura.display.timerFormat = "smart"
+  end
+  aura.display.lowTimeThreshold = tonumber(aura.display.lowTimeThreshold) or 0
+  aura.display.lowTimeTextColorEnabled = NormalizeBool(aura.display.lowTimeTextColorEnabled)
+  aura.display.lowTimeBarColorEnabled = NormalizeBool(aura.display.lowTimeBarColorEnabled)
+  aura.display.fillDirection = SafeLower(aura.display.fillDirection or "ltr")
+  if aura.display.fillDirection ~= "ltr" and aura.display.fillDirection ~= "rtl" then
+    aura.display.fillDirection = "ltr"
+  end
   if aura.display.iconHue < 0 then aura.display.iconHue = 0 end
   if aura.display.iconHue > 360 then aura.display.iconHue = 360 end
   aura.display.iconPath = aura.display.iconPath or ""
@@ -1190,12 +1215,13 @@ end
 -- resources, or stacks without knowing which trigger type produced the state.
 function TwAuras:FormatDynamicDisplayText(template, aura, state, now)
   local text = template or ""
+  local display = state.display or aura.display or {}
   local label = state.label or aura.name or ""
   local value = state.value ~= nil and tostring(state.value) or ""
   local maxValue = state.maxValue ~= nil and tostring(state.maxValue) or ""
   local percent = state.percent ~= nil and tostring(state.percent) or ""
   local stacks = state.stacks ~= nil and tostring(state.stacks) or ""
-  local timeText = state.expirationTime and self:FormatRemainingTime(state.expirationTime, now or GetTime()) or ""
+  local timeText = state.expirationTime and self:FormatRemainingTime(state.expirationTime, now or GetTime(), display.timerFormat) or ""
   local name = state.name or aura.name or ""
   local realHealth = nil
   local realHp = ""
@@ -1292,18 +1318,32 @@ function TwAuras:SummarizeTrigger(trigger)
   elseif trigger.type == "combat" then
     return "player in combat"
   elseif trigger.type == "targetexists" then
-    return "target exists"
+    return (trigger.unit or "target") .. " exists"
   elseif trigger.type == "targethostile" then
-    return "target is hostile"
+    return (trigger.unit or "target") .. " is hostile"
   elseif trigger.type == "combatlog" then
     return "combat log " .. (trigger.combatLogEvent or "ANY") .. " matches \"" .. (trigger.combatLogPattern or "") .. "\""
   elseif trigger.type == "spellcast" then
     return (trigger.sourceUnit or "player") .. " spell " .. (trigger.spellName or "") .. " (" .. (trigger.castPhase or "any") .. ")"
+  elseif trigger.type == "internalcooldown" then
+    if trigger.cooldownState == "ready" then
+      return (trigger.procName or "proc") .. " internal cooldown ready"
+    end
+    return (trigger.procName or "proc") .. " internal cooldown running"
   elseif trigger.type == "cooldown" then
     if trigger.cooldownState == "cooldown" then
       return (trigger.spellName or "") .. " cooldown " .. op .. " " .. tostring(threshold) .. "s"
     end
     return (trigger.spellName or "") .. " ready"
+  elseif trigger.type == "spellusable" then
+    if trigger.cooldownState == "missingresource" then
+      return (trigger.spellName or "") .. " missing resource"
+    elseif trigger.cooldownState == "cooldown" then
+      return (trigger.spellName or "") .. " on cooldown"
+    elseif trigger.cooldownState == "outrange" then
+      return (trigger.spellName or "") .. " out of range"
+    end
+    return (trigger.spellName or "") .. " usable"
   elseif trigger.type == "itemcooldown" then
     if trigger.cooldownState == "cooldown" then
       return "item slot " .. tostring(trigger.itemSlot or 13) .. " cooldown " .. op .. " " .. tostring(threshold) .. "s"
@@ -1341,7 +1381,14 @@ function TwAuras:SummarizeTrigger(trigger)
     end
     return "action slot " .. tostring(trigger.actionSlot or 1) .. " usable"
   elseif trigger.type == "weaponenchant" then
+    if trigger.enchantState == "inactive" then
+      return (trigger.weaponHand or "mainhand") .. " weapon not enchanted"
+    elseif (trigger.threshold or 0) > 0 then
+      return (trigger.weaponHand or "mainhand") .. " weapon enchant " .. op .. " " .. tostring(threshold) .. "s"
+    end
     return (trigger.weaponHand or "mainhand") .. " weapon enchanted"
+  elseif trigger.type == "itemequipped" then
+    return (trigger.itemName or "item") .. " equipped"
   elseif trigger.type == "itemcount" then
     return (trigger.itemName or "item") .. " count " .. op .. " " .. tostring(threshold)
   elseif trigger.type == "range" then

@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.18
+-- TwAuras file version: 0.1.20
 -- Trigger evaluation helpers for aura scans, resource checks, and combat log timers.
 local function CompareValue(value, op, threshold)
   if op == "<" then return value < threshold end
@@ -308,6 +308,35 @@ local function TextMatches(actual, expected)
   return SafeLower(actual) == wanted
 end
 
+local function TextContains(actual, expected)
+  local wanted = SafeLower(expected)
+  if wanted == "" then
+    return false
+  end
+  return string.find(SafeLower(actual), wanted, 1, true) ~= nil
+end
+
+local function ClearRuntimeTimerKeepFlags(timer)
+  if not timer then
+    return
+  end
+  timer.startTime = nil
+  timer.duration = nil
+  timer.expirationTime = nil
+  timer.label = timer.label or nil
+  timer.icon = timer.icon or nil
+end
+
+local function StartInternalCooldown(self, runtimeKey, duration, icon, label)
+  local timer = self:GetAuraRuntime(runtimeKey)
+  if timer.expirationTime and timer.expirationTime > GetTime() then
+    return timer
+  end
+  self:StartAuraTimer(runtimeKey, duration or 0, icon, label)
+  timer = self:GetAuraRuntime(runtimeKey)
+  return timer
+end
+
 local function GetSpellBookType()
   return BOOKTYPE_SPELL or "spell"
 end
@@ -382,6 +411,55 @@ function TwAuras:GetSpellCooldownInfo(spellName)
   }
 end
 
+function TwAuras:GetSpellUsableInfo(spellName)
+  local index = self:FindSpellBookSlot(spellName)
+  local bookType = GetSpellBookType()
+  local texture = nil
+  local startTime = 0
+  local duration = 0
+  local enabled = 0
+  local isUsable = false
+  local notEnoughMana = false
+  local inRange = nil
+  local cooldownDuration
+  local expirationTime
+  local remaining
+
+  if not index then
+    return nil
+  end
+
+  if GetSpellTexture then
+    texture = GetSpellTexture(index, bookType)
+  end
+  if GetSpellCooldown then
+    startTime, duration, enabled = GetSpellCooldown(index, bookType)
+  end
+  if IsUsableSpell then
+    isUsable, notEnoughMana = IsUsableSpell(index, bookType)
+  end
+  if IsSpellInRange then
+    inRange = IsSpellInRange(index, bookType, "target")
+  end
+
+  cooldownDuration, expirationTime, remaining = GetCooldownWindow(startTime, duration)
+
+  return {
+    found = true,
+    icon = texture,
+    name = spellName,
+    usable = isUsable and true or false,
+    notEnoughMana = notEnoughMana and true or false,
+    inRange = inRange,
+    startTime = tonumber(startTime) or 0,
+    duration = cooldownDuration,
+    expirationTime = expirationTime,
+    remaining = remaining or 0,
+    ready = (remaining or 0) <= 0,
+    enabled = enabled,
+  }
+end
+
 function TwAuras:GetInventoryCooldownInfo(slot)
   local numericSlot = tonumber(slot)
   local texture = nil
@@ -415,6 +493,42 @@ function TwAuras:GetInventoryCooldownInfo(slot)
     remaining = remaining or 0,
     ready = (remaining or 0) <= 0,
     enabled = enabled,
+  }
+end
+
+function TwAuras:GetEquippedItemInfo(itemName, wantedSlot)
+  local wanted = SafeLower(itemName)
+  local slotMode = SafeLower(wantedSlot or "any")
+  local slots = {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}
+  local i
+
+  if wanted == "" or not GetInventoryItemLink then
+    return nil
+  end
+
+  if slotMode ~= "any" then
+    slots = { tonumber(slotMode) or 0 }
+  end
+
+  for i = 1, table.getn(slots) do
+    local slot = slots[i]
+    local link = GetInventoryItemLink("player", slot)
+    if link and TextContains(link, wanted) then
+      return {
+        active = true,
+        slot = slot,
+        link = link,
+        name = itemName,
+        label = itemName,
+        icon = GetInventoryItemTexture and GetInventoryItemTexture("player", slot) or nil,
+      }
+    end
+  end
+
+  return {
+    active = false,
+    name = itemName,
+    label = itemName,
   }
 end
 
@@ -880,6 +994,18 @@ local function DebuffTriggerHandler(self, aura, trigger)
     end
     return self:ApplyEstimatedDuration(aura, state)
   end
+  if trigger.sourceFilter == "other" and SafeLower(trigger.unit or "target") == "target" and tracked then
+    if state.active then
+      state.duration = nil
+      state.expirationTime = nil
+    else
+      state = {
+        active = false,
+        name = trigger.auraName,
+        label = trigger.auraName,
+      }
+    end
+  end
   if tracked then
     state.active = true
     state.name = state.name or tracked.name or trigger.auraName
@@ -915,12 +1041,14 @@ local function CombatTriggerHandler()
   return { active = UnitAffectingCombat("player") and true or false, label = "Combat" }
 end
 
-local function TargetExistsTriggerHandler()
-  return { active = UnitExists("target") and true or false, label = "Target Exists" }
+local function TargetExistsTriggerHandler(_, _, trigger)
+  local unit = trigger.unit or "target"
+  return { active = UnitExists(unit) and true or false, label = unit .. " exists" }
 end
 
-local function TargetHostileTriggerHandler()
-  return { active = UnitIsHostileFallback("target"), label = "Target Hostile" }
+local function TargetHostileTriggerHandler(_, _, trigger)
+  local unit = trigger.unit or "target"
+  return { active = UnitIsHostileFallback(unit), label = unit .. " hostile" }
 end
 
 local function CombatLogTriggerHandler(self, aura)
@@ -967,6 +1095,47 @@ local function SpellCastTriggerHandler(self, aura, trigger)
   }
 end
 
+local function InternalCooldownTriggerHandler(self, aura, trigger)
+  local runtimeKey = self:GetTriggerRuntimeKey(aura, trigger)
+  local timer = self:GetAuraRuntime(runtimeKey)
+  local detectMode = SafeLower(trigger.detectMode or "buff")
+  local procState = nil
+  local active
+  local cooling
+
+  if detectMode ~= "combatlog" then
+    procState = self:ScanAura("player", trigger.procName, false)
+    if procState.active and not timer.procActive then
+      timer = StartInternalCooldown(self, runtimeKey, trigger.duration or 0, procState.icon or aura.display.iconPath, trigger.procName or aura.name)
+    end
+    timer.procActive = procState.active and true or false
+  end
+
+  active = timer.expirationTime and timer.expirationTime > GetTime()
+  cooling = active and true or false
+  if not cooling then
+    ClearRuntimeTimerKeepFlags(timer)
+  end
+
+  if trigger.cooldownState == "ready" then
+    active = not cooling
+  else
+    active = cooling
+  end
+
+  return {
+    active = active and true or false,
+    name = trigger.procName or aura.name,
+    label = trigger.procName or aura.name,
+    icon = timer.icon or (procState and procState.icon) or aura.display.iconPath,
+    value = cooling and math.max((timer.expirationTime or 0) - GetTime(), 0) or 0,
+    maxValue = timer.duration or 0,
+    percent = timer.duration and timer.duration > 0 and math.floor((math.max((timer.expirationTime or 0) - GetTime(), 0) / timer.duration) * 100) or 0,
+    duration = timer.duration,
+    expirationTime = timer.expirationTime,
+  }
+end
+
 local function CooldownTriggerHandler(self, _, trigger)
   -- Cooldown triggers report more than a boolean so the same trigger can drive a bar, icon, or
   -- text display without any display-specific cooldown logic.
@@ -980,6 +1149,41 @@ local function CooldownTriggerHandler(self, _, trigger)
     active = not info.ready and CompareValue(info.remaining, trigger.operator or ">=", trigger.threshold or 0)
   else
     active = info.ready
+  end
+
+  return {
+    active = active and true or false,
+    name = info.name,
+    label = info.name,
+    icon = info.icon,
+    value = info.remaining,
+    maxValue = info.duration or 0,
+    percent = info.duration and info.duration > 0 and math.floor((info.remaining / info.duration) * 100) or 0,
+    startTime = info.duration and info.expirationTime and (info.expirationTime - info.duration) or nil,
+    duration = info.duration,
+    expirationTime = info.expirationTime,
+  }
+end
+
+local function SpellUsableTriggerHandler(self, _, trigger)
+  local info = self:GetSpellUsableInfo(trigger.spellName)
+  local stateName = SafeLower(trigger.cooldownState or "usable")
+  local active
+  if not info then
+    return { active = false, label = trigger.spellName or "Spell Usable" }
+  end
+
+  if stateName == "missingresource" then
+    active = info.notEnoughMana and true or false
+  elseif stateName == "cooldown" then
+    active = not info.ready
+  elseif stateName == "outrange" then
+    active = info.inRange == 0
+  else
+    active = info.usable and not info.notEnoughMana
+    if stateName == "usable" then
+      active = active and info.ready
+    end
   end
 
   return {
@@ -1156,17 +1360,41 @@ end
 
 local function WeaponEnchantTriggerHandler(self, _, trigger)
   local info = self:GetWeaponEnchantInfoForTrigger(trigger.weaponHand)
+  local active
   if not info then
     return { active = false, label = "Weapon Enchant" }
   end
+  active = info.active and true or false
+  if trigger.enchantState == "inactive" then
+    active = not active
+  elseif active and (trigger.threshold or 0) > 0 then
+    active = CompareValue(info.remaining or 0, trigger.operator or ">=", trigger.threshold or 0)
+  end
+  if active and (trigger.minCharges or 0) > 0 then
+    active = (info.charges or 0) >= (trigger.minCharges or 0)
+  end
   return {
-    active = info.active and true or false,
+    active = active and true or false,
     name = info.hand,
     label = (info.hand or "weapon") .. " enchant",
     value = info.remaining or 0,
     maxValue = info.duration or 0,
     duration = info.duration,
     expirationTime = info.expirationTime,
+    stacks = info.charges or 0,
+  }
+end
+
+local function ItemEquippedTriggerHandler(self, _, trigger)
+  local info = self:GetEquippedItemInfo(trigger.itemName, trigger.equipmentSlot)
+  if not info then
+    return { active = false, label = trigger.itemName or "Equipped Item" }
+  end
+  return {
+    active = info.active and true or false,
+    name = info.name,
+    label = info.label,
+    icon = info.icon,
   }
 end
 
@@ -1351,8 +1579,23 @@ function TwAuras:RecordCombatLog(chatEvent, message)
         local pattern = trigger.combatLogPattern or ""
         local eventMatches = wantedEvent == "ANY" or wantedEvent == string.upper(chatEvent or "")
         local patternMatches = pattern ~= "" and string.find(string.lower(message), string.lower(pattern), 1, true)
-        if eventMatches and patternMatches then
-          self:StartAuraTimer(self:GetTriggerRuntimeKey(aura, trigger), trigger.duration or 0, aura.display.iconPath, aura.name)
+      if eventMatches and patternMatches then
+        self:StartAuraTimer(self:GetTriggerRuntimeKey(aura, trigger), trigger.duration or 0, aura.display.iconPath, aura.name)
+        self:RefreshAura(aura)
+      end
+      elseif trigger and trigger.type == "internalcooldown" then
+        local detectMode = SafeLower(trigger.detectMode or "buff")
+        local pattern = trigger.combatLogPattern or trigger.procName or ""
+        if (detectMode == "combatlog" or detectMode == "either")
+          and pattern ~= ""
+          and string.find(string.lower(message), string.lower(pattern), 1, true) then
+          StartInternalCooldown(
+            self,
+            self:GetTriggerRuntimeKey(aura, trigger),
+            trigger.duration or 0,
+            aura.display.iconPath,
+            trigger.procName or aura.name
+          )
           self:RefreshAura(aura)
         end
       elseif trigger and trigger.type == "spellcast" then
@@ -1399,7 +1642,7 @@ TwAuras:RegisterTriggerType("buff", {
   handler = BuffTriggerHandler,
   events = {"auras", "world"},
   fields = {
-    { key = "unit", label = "Unit", type = "select", width = 110, default = "player", options = {"player", "target", "pet", "focus"} },
+    { key = "unit", label = "Unit", type = "select", width = 110, default = "player", options = {"player", "target", "targettarget", "pet", "focus"} },
     { key = "auraName", label = "Aura / Spell", type = "text", width = 180, default = "" },
     { key = "duration", label = "Duration", type = "number", width = 70, default = 0, help = "Estimated timer seconds" },
     { key = "trackMissing", label = "Track Missing Aura", type = "bool", default = false },
@@ -1412,11 +1655,12 @@ TwAuras:RegisterTriggerType("debuff", {
   handler = DebuffTriggerHandler,
   events = {"auras", "target", "world"},
   fields = {
-    { key = "unit", label = "Unit", type = "select", width = 110, default = "target", options = {"target", "player", "pet", "focus"} },
+    { key = "unit", label = "Unit", type = "select", width = 110, default = "target", options = {"target", "targettarget", "player", "pet", "focus"} },
     { key = "auraName", label = "Aura / Spell", type = "text", width = 180, default = "" },
     { key = "sourceFilter", label = "Source", type = "select", width = 100, default = "any", options = {
       { value = "any", label = "Any Source" },
       { value = "player", label = "Cast By Player" },
+      { value = "other", label = "Cast By Others" },
     } },
     { key = "useTrackedTimer", label = "Use Saved Timer", type = "bool", default = true },
     { key = "duration", label = "Duration", type = "number", width = 70, default = 0, help = "Estimated timer seconds" },
@@ -1455,7 +1699,7 @@ TwAuras:RegisterTriggerType("health", {
   handler = HealthTriggerHandler,
   events = {"health", "world"},
   fields = {
-    { key = "unit", label = "Unit", type = "select", width = 110, default = "player", options = {"player", "target", "pet", "focus"} },
+    { key = "unit", label = "Unit", type = "select", width = 110, default = "player", options = {"player", "target", "targettarget", "pet", "focus"} },
     { key = "operator", label = "Operator", type = "select", width = 70, default = ">=", options = {"<", "<=", ">", ">=", "="} },
     { key = "threshold", label = "Threshold", type = "number", width = 70, default = 0 },
     { key = "valueMode", label = "Value Mode", type = "select", width = 90, default = "absolute", options = {"absolute", "percent"} },
@@ -1477,6 +1721,7 @@ TwAuras:RegisterTriggerType("targetexists", {
   handler = TargetExistsTriggerHandler,
   events = {"target", "world"},
   fields = {
+    { key = "unit", label = "Unit", type = "select", width = 110, default = "target", options = {"target", "targettarget", "focus", "pet"} },
     { key = "invert", label = "Invert Result", type = "bool", default = false },
   },
 })
@@ -1486,6 +1731,7 @@ TwAuras:RegisterTriggerType("targethostile", {
   handler = TargetHostileTriggerHandler,
   events = {"target", "world"},
   fields = {
+    { key = "unit", label = "Unit", type = "select", width = 110, default = "target", options = {"target", "targettarget", "focus", "pet"} },
     { key = "invert", label = "Invert Result", type = "bool", default = false },
   },
 })
@@ -1528,6 +1774,27 @@ TwAuras:RegisterTriggerType("spellcast", {
   },
 })
 
+TwAuras:RegisterTriggerType("internalcooldown", {
+  displayName = "Internal Cooldown",
+  handler = InternalCooldownTriggerHandler,
+  events = {"auras", "combatlog", "world"},
+  fields = {
+    { key = "procName", label = "Proc / Buff Name", type = "text", width = 180, default = "" },
+    { key = "detectMode", label = "Detect From", type = "select", width = 110, default = "buff", options = {
+      { value = "buff", label = "Player Buff Gain" },
+      { value = "combatlog", label = "Combat Log Match" },
+      { value = "either", label = "Either" },
+    } },
+    { key = "combatLogPattern", label = "Combat Log Match", type = "text", width = 220, default = "", help = "Optional partial combat log text for item procs or tier effects without a clean buff edge." },
+    { key = "duration", label = "ICD Seconds", type = "number", width = 70, default = 45 },
+    { key = "cooldownState", label = "Show", type = "select", width = 90, default = "cooldown", options = {
+      { value = "cooldown", label = "While Cooling" },
+      { value = "ready", label = "When Ready" },
+    } },
+    { key = "invert", label = "Invert Result", type = "bool", default = false },
+  },
+})
+
 TwAuras:RegisterTriggerType("cooldown", {
   displayName = "Spell Cooldown",
   handler = CooldownTriggerHandler,
@@ -1537,6 +1804,22 @@ TwAuras:RegisterTriggerType("cooldown", {
     { key = "cooldownState", label = "State", type = "select", width = 90, default = "ready", options = {"ready", "cooldown"} },
     { key = "operator", label = "Operator", type = "select", width = 70, default = ">=", options = {"<", "<=", ">", ">=", "="} },
     { key = "threshold", label = "Threshold", type = "number", width = 70, default = 0, help = "Seconds remaining when using cooldown state" },
+    { key = "invert", label = "Invert Result", type = "bool", default = false },
+  },
+})
+
+TwAuras:RegisterTriggerType("spellusable", {
+  displayName = "Spell Usable",
+  handler = SpellUsableTriggerHandler,
+  events = {"cooldown", "spells", "action", "target", "world"},
+  fields = {
+    { key = "spellName", label = "Spell Name", type = "text", width = 180, default = "" },
+    { key = "cooldownState", label = "State", type = "select", width = 110, default = "usable", options = {
+      { value = "usable", label = "Usable" },
+      { value = "missingresource", label = "Missing Resource" },
+      { value = "cooldown", label = "On Cooldown" },
+      { value = "outrange", label = "Out Of Range" },
+    } },
     { key = "invert", label = "Invert Result", type = "bool", default = false },
   },
 })
@@ -1639,6 +1922,31 @@ TwAuras:RegisterTriggerType("weaponenchant", {
       { value = "mainhand", label = "Main Hand" },
       { value = "offhand", label = "Off Hand" },
       { value = "either", label = "Either Hand" },
+    } },
+    { key = "enchantState", label = "State", type = "select", width = 100, default = "active", options = {
+      { value = "active", label = "Active" },
+      { value = "inactive", label = "Inactive" },
+    } },
+    { key = "operator", label = "Operator", type = "select", width = 70, default = ">=", options = {"<", "<=", ">", ">=", "="} },
+    { key = "threshold", label = "Min Remaining", type = "number", width = 70, default = 0 },
+    { key = "minCharges", label = "Min Charges", type = "number", width = 70, default = 0 },
+    { key = "invert", label = "Invert Result", type = "bool", default = false },
+  },
+})
+
+TwAuras:RegisterTriggerType("itemequipped", {
+  displayName = "Item Equipped",
+  handler = ItemEquippedTriggerHandler,
+  events = {"inventory", "world"},
+  fields = {
+    { key = "itemName", label = "Item Name", type = "text", width = 180, default = "" },
+    { key = "equipmentSlot", label = "Slot", type = "select", width = 120, default = "any", options = {
+      { value = "any", label = "Any Equipped Slot" },
+      { value = "13", label = "Top Trinket (13)" },
+      { value = "14", label = "Bottom Trinket (14)" },
+      { value = "16", label = "Main Hand (16)" },
+      { value = "17", label = "Off Hand (17)" },
+      { value = "18", label = "Ranged / Relic (18)" },
     } },
     { key = "invert", label = "Invert Result", type = "bool", default = false },
   },

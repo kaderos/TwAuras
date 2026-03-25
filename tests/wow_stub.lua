@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.4
+-- TwAuras file version: 0.1.6
 local stub = {}
 
 local currentTime = 0
@@ -44,6 +44,7 @@ local stealthedState = false
 local partyMembers = 0
 local raidMembers = 0
 local playedSounds = {}
+local tooltipAuraName = nil
 
 local function ensureUnit(unit)
   unitData[unit] = unitData[unit] or {}
@@ -107,6 +108,7 @@ local function makeFrame()
   function frame:SetValue() end
   function frame:SetStatusBarTexture() end
   function frame:SetStatusBarColor() end
+  function frame:SetReverseFill() end
   function frame:SetAlpha() end
   function frame:SetMovable() end
   function frame:EnableMouse() end
@@ -202,12 +204,22 @@ function stub.install()
     return comboPoints
   end
 
-  _G.UnitBuff = function()
-    return nil
+  _G.UnitBuff = function(unit, index)
+    local buffs = ensureUnit(unit).buffs or {}
+    local buff = buffs[index]
+    if not buff then
+      return nil
+    end
+    return buff.texture or "Interface\\Icons\\INV_Misc_QuestionMark", buff.count or 0, buff.spellId or nil
   end
 
-  _G.UnitDebuff = function()
-    return nil
+  _G.UnitDebuff = function(unit, index)
+    local debuffs = ensureUnit(unit).debuffs or {}
+    local debuff = debuffs[index]
+    if not debuff then
+      return nil
+    end
+    return debuff.texture or "Interface\\Icons\\INV_Misc_QuestionMark", debuff.count or 0, debuff.spellId or nil
   end
 
   _G.GetSpellName = function(index)
@@ -223,6 +235,22 @@ function stub.install()
     return spell and spell.texture or nil
   end
 
+  _G.IsUsableSpell = function(index)
+    local spell = spellBook[index]
+    if spell then
+      return spell.usable and true or false, spell.notEnoughMana and true or false
+    end
+    return false, false
+  end
+
+  _G.IsSpellInRange = function(index)
+    local spell = spellBook[index]
+    if not spell or spell.inRange == nil then
+      return nil
+    end
+    return spell.inRange and 1 or 0
+  end
+
   _G.GetSpellCooldown = function(index)
     local info = spellCooldowns[index]
     if info then
@@ -233,6 +261,14 @@ function stub.install()
 
   _G.GetInventoryItemTexture = function(_, slot)
     return inventoryTextures[slot]
+  end
+
+  _G.GetInventoryItemLink = function(_, slot)
+    local info = inventoryCooldowns[slot]
+    if info and info.link then
+      return info.link
+    end
+    return nil
   end
 
   _G.GetInventoryItemCooldown = function(_, slot)
@@ -383,7 +419,7 @@ function stub.install()
   _G.getglobal = function()
     return {
       GetText = function()
-        return nil
+        return tooltipAuraName
       end,
       SetText = noop,
     }
@@ -392,8 +428,14 @@ function stub.install()
   _G.GameTooltip = {
     SetOwner = noop,
     Hide = noop,
-    SetUnitDebuff = noop,
-    SetUnitBuff = noop,
+    SetUnitDebuff = function(_, unit, index)
+      local debuff = (ensureUnit(unit).debuffs or {})[index]
+      tooltipAuraName = debuff and debuff.name or nil
+    end,
+    SetUnitBuff = function(_, unit, index)
+      local buff = (ensureUnit(unit).buffs or {})[index]
+      tooltipAuraName = buff and buff.name or nil
+    end,
   }
 end
 
@@ -415,6 +457,14 @@ function stub.set_unit(unit, values)
   for key, value in pairs(values or {}) do
     data[key] = value
   end
+end
+
+function stub.set_unit_buffs(unit, buffs)
+  ensureUnit(unit).buffs = buffs or {}
+end
+
+function stub.set_unit_debuffs(unit, debuffs)
+  ensureUnit(unit).debuffs = debuffs or {}
 end
 
 function stub.get_messages()

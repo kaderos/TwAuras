@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.23
+-- TwAuras file version: 0.1.25
 -- Config.lua owns editor-only concerns: aura CRUD, dynamic trigger lists, and descriptor-driven widgets.
 local function SafeLower(value)
   if not value then
@@ -282,9 +282,16 @@ function TwAuras:CreateAuraTemplate()
       iconHue = 0,
       showCooldownSwipe = false,
       showCooldownOverlay = false,
+      timerFormat = "smart",
       labelText = "%name",
       timerText = "%time",
       valueText = "%value/%max",
+      lowTimeThreshold = 0,
+      lowTimeTextColorEnabled = false,
+      lowTimeTextColor = {1, 0.2, 0.2, 1},
+      lowTimeBarColorEnabled = false,
+      lowTimeBarColor = {1, 0.2, 0.2, 1},
+      fillDirection = "ltr",
       fontSize = 12,
       fontOutline = "",
       labelAnchor = "BOTTOM",
@@ -875,63 +882,61 @@ function TwAuras:RefreshSoundPickerFilter()
     query = string.lower(frame.searchBox:GetText() or "")
   end
 
-  local rowsPerPage = frame.rowsPerPage or 8
   local matches = {}
   local i
-  for i = 1, table.getn(frame.buttons or {}) do
-    local button = frame.buttons[i]
-    local soundPath = string.lower(button.__soundPath or "")
+  for i = 1, table.getn(SOUND_PICKER_SOUNDS) do
+    local soundPath = string.lower(SOUND_PICKER_SOUNDS[i] or "")
     if query == "" or string.find(soundPath, query, 1, true) then
-      table.insert(matches, button)
-    else
-      button:Hide()
+      table.insert(matches, SOUND_PICKER_SOUNDS[i])
     end
   end
 
-  local totalMatches = table.getn(matches)
-  local totalPages = math.max(1, math.ceil(totalMatches / rowsPerPage))
-  if not frame.pageIndex or frame.pageIndex < 1 then
-    frame.pageIndex = 1
-  end
-  if frame.pageIndex > totalPages then
-    frame.pageIndex = totalPages
-  end
-
-  local startIndex = ((frame.pageIndex - 1) * rowsPerPage) + 1
-  local endIndex = math.min(totalMatches, startIndex + rowsPerPage - 1)
-  local visibleIndex = 0
-
-  for i = startIndex, endIndex do
-    local button = matches[i]
-    if button then
-      button:ClearAllPoints()
-      button:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -94 - (visibleIndex * 28))
-      button:Show()
-      visibleIndex = visibleIndex + 1
-    end
-  end
+  frame.filteredSounds = matches
 
   if frame.noResultsText then
-    if totalMatches == 0 then
+    if table.getn(matches) == 0 then
       frame.noResultsText:Show()
     else
       frame.noResultsText:Hide()
     end
   end
 
-  if frame.pageText then
-    if totalMatches == 0 then
-      frame.pageText:SetText("Page 0 / 0")
+  if frame.scrollChild then
+    frame.scrollChild:SetHeight(math.max(1, table.getn(matches) * 24))
+  end
+
+  for i = 1, table.getn(frame.rows or {}) do
+    local row = frame.rows[i]
+    local soundValue = matches[i]
+    if soundValue then
+      row.__soundPath = soundValue
+      row:SetText(soundValue)
+      row:Show()
+      if frame.selectedSound == soundValue then
+        row:LockHighlight()
+      else
+        row:UnlockHighlight()
+      end
     else
-      frame.pageText:SetText("Page " .. frame.pageIndex .. " / " .. totalPages)
+      row.__soundPath = nil
+      row:Hide()
     end
   end
 
-  if frame.prevButton then
-    if frame.pageIndex <= 1 then frame.prevButton:Disable() else frame.prevButton:Enable() end
+  if frame.selectedText then
+    if frame.selectedSound and frame.selectedSound ~= "" then
+      frame.selectedText:SetText("Selected: " .. frame.selectedSound)
+    else
+      frame.selectedText:SetText("Selected: none")
+    end
   end
-  if frame.nextButton then
-    if frame.pageIndex >= totalPages then frame.nextButton:Disable() else frame.nextButton:Enable() end
+
+  if frame.testSelectedButton then
+    if frame.selectedSound and frame.selectedSound ~= "" then
+      frame.testSelectedButton:Enable()
+    else
+      frame.testSelectedButton:Disable()
+    end
   end
 end
 
@@ -940,14 +945,15 @@ function TwAuras:BuildSoundPicker()
     return
   end
 
-  local rowsPerPage = 8
-  local pickerHeight = 96 + (rowsPerPage * 28) + 28
+  local visibleRows = 10
+  local pickerHeight = 170 + (visibleRows * 24)
 
   local frame = CreateFrame("Frame", "TwAurasSoundPickerFrame", UIParent)
   frame:SetWidth(470)
   frame:SetHeight(pickerHeight)
-  frame.rowsPerPage = rowsPerPage
-  frame.pageIndex = 1
+  frame.visibleRows = visibleRows
+  frame.selectedSound = nil
+  frame.filteredSounds = {}
   frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
   frame:SetBackdrop({
     bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -974,51 +980,59 @@ function TwAuras:BuildSoundPicker()
   frame.targetText:SetWidth(300)
   frame.targetText:SetJustifyH("LEFT")
   frame.targetText:SetText("")
+  frame.selectedText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  frame.selectedText:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -96)
+  frame.selectedText:SetWidth(360)
+  frame.selectedText:SetJustifyH("LEFT")
+  frame.selectedText:SetText("Selected: none")
   frame.noResultsText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  frame.noResultsText:SetPoint("TOP", frame, "TOP", 0, -148)
+  frame.noResultsText:SetPoint("TOP", frame, "TOP", 0, -186)
   frame.noResultsText:SetText("No matching sounds in the current picker list.")
   frame.noResultsText:Hide()
-  frame.pageText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  frame.pageText:SetPoint("TOP", frame, "TOP", 0, -78)
-  frame.pageText:SetText("Page 1 / 1")
 
-  frame.buttons = {}
+  frame.scrollFrame = CreateFrame("ScrollFrame", "TwAurasSoundPickerScroll", frame, "UIPanelScrollFrameTemplate")
+  frame.scrollFrame:SetWidth(430)
+  frame.scrollFrame:SetHeight(visibleRows * 24)
+  frame.scrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -118)
+  frame.scrollChild = CreateFrame("Frame", nil, frame.scrollFrame)
+  frame.scrollChild:SetWidth(406)
+  frame.scrollChild:SetHeight(1)
+  frame.scrollFrame:SetScrollChild(frame.scrollChild)
+
+  frame.rows = {}
   local i
   for i = 1, table.getn(SOUND_PICKER_SOUNDS) do
-    local button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    button:SetWidth(430)
-    button:SetHeight(22)
-    button:SetText(SOUND_PICKER_SOUNDS[i])
-    button.__soundPath = SOUND_PICKER_SOUNDS[i]
+    local button = CreateFrame("Button", nil, frame.scrollChild, "UIPanelButtonTemplate")
+    button:SetWidth(402)
+    button:SetHeight(20)
+    button:SetPoint("TOPLEFT", frame.scrollChild, "TOPLEFT", 0, -((i - 1) * 24))
+    button:SetText("")
     button:SetScript("OnClick", function()
-      local targetField = TwAuras.soundPickerFrame and TwAuras.soundPickerFrame.targetField or nil
-      local control = targetField and TwAuras.configFrame and TwAuras.configFrame[targetField] or nil
-      if control then
-        control:SetText(this.__soundPath or "")
-        if TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
-          TwAuras:ApplyEditorToSelectedAura(true)
-        end
-      end
-      TwAuras.soundPickerFrame:Hide()
+      TwAuras.soundPickerFrame.selectedSound = this.__soundPath or ""
+      TwAuras:RefreshSoundPickerFilter()
     end)
-    frame.buttons[i] = button
+    frame.rows[i] = button
   end
 
-  frame.prevButton = MakeButton(frame, "<", 28, 20, 170, -74, function()
-    if not TwAuras.soundPickerFrame then
-      return
+  frame.useSelectedButton = MakeButton(frame, "Use Selected", 100, 22, 18, -(pickerHeight - 34), function()
+    local soundValue = TwAuras.soundPickerFrame and TwAuras.soundPickerFrame.selectedSound or ""
+    local targetField = TwAuras.soundPickerFrame and TwAuras.soundPickerFrame.targetField or nil
+    local control = targetField and TwAuras.configFrame and TwAuras.configFrame[targetField] or nil
+    if control and soundValue and soundValue ~= "" then
+      control:SetText(soundValue)
+      if TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+        TwAuras:ApplyEditorToSelectedAura(true)
+      end
+      TwAuras.soundPickerFrame:Hide()
     end
-    TwAuras.soundPickerFrame.pageIndex = math.max(1, (TwAuras.soundPickerFrame.pageIndex or 1) - 1)
-    TwAuras:RefreshSoundPickerFilter()
   end)
-  frame.nextButton = MakeButton(frame, ">", 28, 20, 270, -74, function()
-    if not TwAuras.soundPickerFrame then
-      return
+  frame.testSelectedButton = MakeButton(frame, "Test Selected", 100, 22, 124, -(pickerHeight - 34), function()
+    local soundValue = TwAuras.soundPickerFrame and TwAuras.soundPickerFrame.selectedSound or ""
+    if soundValue and soundValue ~= "" then
+      TwAuras:PlayConfiguredSound(soundValue)
     end
-    TwAuras.soundPickerFrame.pageIndex = (TwAuras.soundPickerFrame.pageIndex or 1) + 1
-    TwAuras:RefreshSoundPickerFilter()
   end)
-  frame.clearButton = MakeButton(frame, "Clear", 90, 22, 74, -(pickerHeight - 34), function()
+  frame.clearButton = MakeButton(frame, "Clear", 90, 22, 230, -(pickerHeight - 34), function()
     local targetField = TwAuras.soundPickerFrame and TwAuras.soundPickerFrame.targetField or nil
     local control = targetField and TwAuras.configFrame and TwAuras.configFrame[targetField] or nil
     if control then
@@ -1029,7 +1043,7 @@ function TwAuras:BuildSoundPicker()
     end
     TwAuras.soundPickerFrame:Hide()
   end)
-  frame.closeButton = MakeButton(frame, "Close", 90, 22, 306, -(pickerHeight - 34), function()
+  frame.closeButton = MakeButton(frame, "Close", 90, 22, 330, -(pickerHeight - 34), function()
     frame:Hide()
   end)
 
@@ -1123,6 +1137,7 @@ end
 function TwAuras:OpenSoundPicker(targetField, label)
   self:BuildSoundPicker()
   self.soundPickerFrame.targetField = targetField
+  self.soundPickerFrame.selectedSound = ""
   if self.soundPickerFrame.targetText then
     self.soundPickerFrame.targetText:SetText("Picking for: " .. (label or "Sound"))
   end
@@ -1891,10 +1906,16 @@ function TwAuras:BuildConfigFrame()
   frame.soundStartPickButton = MakeButton(conditionsTab, "Pick", 46, 20, 456, -352, function()
     TwAuras:OpenSoundPicker("soundStartBox", "Start Sound")
   end)
+  frame.soundStartTestButton = MakeButton(conditionsTab, "Test", 46, 20, 506, -352, function()
+    TwAuras:PlayConfiguredSound(TwAuras.configFrame.soundStartBox:GetText() or "")
+  end)
   MakeLabel(conditionsTab, "Active Sound", 200, -384)
   frame.soundActiveBox = MakeEditBox(conditionsTab, 150, 20, 300, -380)
   frame.soundActivePickButton = MakeButton(conditionsTab, "Pick", 46, 20, 456, -380, function()
     TwAuras:OpenSoundPicker("soundActiveBox", "Active Sound")
+  end)
+  frame.soundActiveTestButton = MakeButton(conditionsTab, "Test", 46, 20, 506, -380, function()
+    TwAuras:PlayConfiguredSound(TwAuras.configFrame.soundActiveBox:GetText() or "")
   end)
   MakeLabel(conditionsTab, "Repeat Seconds", 200, -412)
   frame.soundActiveIntervalBox = MakeEditBox(conditionsTab, 60, 20, 300, -408)
@@ -1902,6 +1923,9 @@ function TwAuras:BuildConfigFrame()
   frame.soundStopBox = MakeEditBox(conditionsTab, 150, 20, 300, -436)
   frame.soundStopPickButton = MakeButton(conditionsTab, "Pick", 46, 20, 456, -436, function()
     TwAuras:OpenSoundPicker("soundStopBox", "Stop Sound")
+  end)
+  frame.soundStopTestButton = MakeButton(conditionsTab, "Test", 46, 20, 506, -436, function()
+    TwAuras:PlayConfiguredSound(TwAuras.configFrame.soundStopBox:GetText() or "")
   end)
   MakeLabel(conditionsTab, "Use a sound file path or numeric sound id. Start and Stop fire once, Active repeats while the aura stays active.", 200, -466)
 
