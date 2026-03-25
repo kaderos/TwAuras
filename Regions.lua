@@ -1,5 +1,6 @@
--- TwAuras file version: 0.1.19
+-- TwAuras file version: 0.1.20
 -- Region helpers handle positioning, coloring, and drag behavior shared by all displays.
+-- Shared color application lets the same helper tint textures, bars, and font strings.
 local function SetColor(region, color)
   if not region then
     return
@@ -16,11 +17,13 @@ local function SetColor(region, color)
 end
 
 
+-- Region positions are always reapplied from saved config so unlock-and-drag stays persistent.
 local function ApplyPoint(frame, pos)
   frame:ClearAllPoints()
   frame:SetPoint(pos.point or "CENTER", UIParent, pos.relativePoint or "CENTER", pos.x or 0, pos.y or 0)
 end
 
+-- Strata is a saved display option, so every region type routes through one setter.
 local function ApplyStrata(frame, display)
   if frame and frame.SetFrameStrata then
     frame:SetFrameStrata((display and display.strata) or "MEDIUM")
@@ -44,6 +47,7 @@ local TEXT_TOKEN_HELP =
   "%realmaxmana: estimated or exact target max mana.\n" ..
   "%realmanadeficit: missing target mana."
 
+-- Icon hue tinting is generated from a single hue slider rather than a full color picker.
 local function HueToRGB(hue)
   local normalized = (tonumber(hue) or 0) / 60
   local chroma = 1
@@ -62,6 +66,7 @@ local function HueToRGB(hue)
   return chroma, 0, x
 end
 
+-- Icon tinting either uses the explicit hue override or the normal display color.
 local function GetIconTint(display)
   if display and display.iconHueEnabled then
     local r, g, b = HueToRGB(display.iconHue or 0)
@@ -70,6 +75,7 @@ local function GetIconTint(display)
   return display and display.color or {1, 1, 1, 1}
 end
 
+-- Cooldown swipes are best-effort: use whichever cooldown API the current client exposes.
 local function SetCooldownFrameTimer(frame, startTime, duration)
   if not frame then
     return false
@@ -87,6 +93,7 @@ local function SetCooldownFrameTimer(frame, startTime, duration)
   return false
 end
 
+-- Text anchors are constrained to the simplified set the config UI exposes.
 local function GetAnchorPoint(anchor)
   local normalized = string.upper(anchor or "CENTER")
   if normalized == "TOP" or normalized == "BOTTOM" or normalized == "LEFT" or normalized == "RIGHT" or normalized == "CENTER" then
@@ -95,6 +102,7 @@ local function GetAnchorPoint(anchor)
   return "CENTER"
 end
 
+-- All text pieces clear and re-anchor each refresh so changing display anchors applies immediately.
 local function ClearAndSetAnchor(fontString, frame, anchor, inset)
   local point = GetAnchorPoint(anchor)
   local distance = inset or 2
@@ -112,6 +120,7 @@ local function ClearAndSetAnchor(fontString, frame, anchor, inset)
   end
 end
 
+-- Font settings come from the resolved display so conditions can override them cleanly later.
 local function ApplyFont(fontString, aura)
   local display = aura.__state and aura.__state.display or aura.display
   local flags = display.fontOutline or ""
@@ -121,6 +130,7 @@ local function ApplyFont(fontString, aura)
   fontString:SetFont(STANDARD_TEXT_FONT, display.fontSize or 12, flags)
 end
 
+-- Glow frames are created lazily because many auras never enable glow at all.
 local function EnsureGlow(frame)
   if frame.glowFrame then
     return frame.glowFrame
@@ -137,6 +147,7 @@ local function EnsureGlow(frame)
   return frame.glowFrame
 end
 
+-- Glow application is a visual toggle only; it never changes the aura's logical state.
 local function ApplyGlow(frame, display)
   local glowFrame = EnsureGlow(frame)
   if display and display.glow then
@@ -256,6 +267,7 @@ local function GetNamedFrame(name)
   return nil
 end
 
+-- Unitframe overlays attach to stock party and raid frames by known Vanilla/Turtle names.
 local function GetFrameTargetEntries(scope)
   local entries = {}
   local normalized = string.lower(scope or "party")
@@ -277,6 +289,103 @@ local function GetFrameTargetEntries(scope)
     end
   end
   return entries
+end
+
+-- Unitframe icon anchors are intentionally limited to the top edge to match healer-style overlays.
+local function NormalizeFrameAnchor(anchor)
+  local normalized = string.upper(anchor or "TOPLEFT")
+  if normalized == "TOP" or normalized == "TOPLEFT" or normalized == "TOPRIGHT" then
+    return normalized
+  end
+  return "TOPLEFT"
+end
+
+-- Overlay spacing is recalculated from active states each refresh instead of keeping persistent slots.
+local function BuildUnitFrameIconLayoutEntries(owner, unit, anchor)
+  local entries = {}
+  local auras = owner.GetAuraList and owner:GetAuraList() or {}
+  local i
+  local j
+
+  for i = 1, table.getn(auras) do
+    local aura = auras[i]
+    local display = aura and aura.display or nil
+    local unitStates = aura and aura.__unitStates or nil
+    if aura
+      and aura.regionType == "unitframes"
+      and display
+      and display.overlayStyle ~= "glow"
+      and NormalizeFrameAnchor(display.frameAnchor) == anchor
+      and unitStates then
+      for j = 1, table.getn(unitStates) do
+        local state = unitStates[j]
+        if state and state.active and state.unit == unit then
+          table.insert(entries, {
+            auraId = aura.id,
+            stateIndex = j,
+            width = (display.width or 16),
+          })
+        end
+      end
+    end
+  end
+
+  return entries
+end
+
+-- Offset calculation makes multiple unitframe icons spread away from the chosen anchor without overlap.
+local function GetUnitFrameIconOffset(owner, auraObj, state, stateIndex)
+  local anchor = NormalizeFrameAnchor(auraObj and auraObj.display and auraObj.display.frameAnchor)
+  local entries = BuildUnitFrameIconLayoutEntries(owner, state and state.unit or nil, anchor)
+  local gap = 2
+  local i
+  local running
+  local totalWidth
+
+  if table.getn(entries) <= 1 then
+    if anchor == "TOPRIGHT" then
+      return -2
+    elseif anchor == "TOP" then
+      return 0
+    end
+    return 2
+  end
+
+  if anchor == "TOPLEFT" then
+    running = 2
+    for i = 1, table.getn(entries) do
+      if entries[i].auraId == auraObj.id and entries[i].stateIndex == stateIndex then
+        return running
+      end
+      running = running + entries[i].width + gap
+    end
+    return 2
+  elseif anchor == "TOPRIGHT" then
+    running = -2
+    for i = 1, table.getn(entries) do
+      if entries[i].auraId == auraObj.id and entries[i].stateIndex == stateIndex then
+        return running
+      end
+      running = running - (entries[i].width + gap)
+    end
+    return -2
+  end
+
+  totalWidth = 0
+  for i = 1, table.getn(entries) do
+    totalWidth = totalWidth + entries[i].width
+  end
+  totalWidth = totalWidth + (math.max(table.getn(entries) - 1, 0) * gap)
+  running = -(totalWidth / 2)
+  for i = 1, table.getn(entries) do
+    local centerOffset = running + (entries[i].width / 2)
+    if entries[i].auraId == auraObj.id and entries[i].stateIndex == stateIndex then
+      return centerOffset
+    end
+    running = running + entries[i].width + gap
+  end
+
+  return 0
 end
 
 -- Icon regions are the default display type for buffs, debuffs, and timer-style auras.
@@ -638,15 +747,10 @@ function TwAuras:CreateUnitFrameRegion(aura)
             overlay:SetBackdropBorderColor(color[1] or 1, color[2] or 0.2, color[3] or 0.2, color[4] or 1)
           end
         else
-          local iconX = 0
-          if display.frameAnchor == "TOPLEFT" then
-            iconX = 2
-          elseif display.frameAnchor == "TOPRIGHT" then
-            iconX = -2
-          end
+          local iconX = GetUnitFrameIconOffset(TwAuras, auraObj, state, i)
           overlay:SetWidth(display.width or 16)
           overlay:SetHeight(display.height or 16)
-          overlay:SetPoint(display.frameAnchor or "TOPLEFT", targetFrame, display.frameAnchor or "TOPLEFT", iconX, display.frameYOffset or 0)
+          overlay:SetPoint(NormalizeFrameAnchor(display.frameAnchor), targetFrame, NormalizeFrameAnchor(display.frameAnchor), iconX, display.frameYOffset or 0)
           overlay:SetBackdrop(nil)
           overlay.icon:SetTexture((display.iconPath ~= "" and display.iconPath) or state.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
           if overlay.icon.SetDesaturated then

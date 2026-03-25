@@ -1,5 +1,6 @@
--- TwAuras file version: 0.1.33
+-- TwAuras file version: 0.1.35
 -- Trigger evaluation helpers for aura scans, resource checks, and combat log timers.
+-- Trigger comparisons stay local to this file because trigger handlers use them constantly.
 local function CompareValue(value, op, threshold)
   if op == "<" then return value < threshold end
   if op == "<=" then return value <= threshold end
@@ -9,6 +10,7 @@ local function CompareValue(value, op, threshold)
   return false
 end
 
+-- Name normalization keeps combat-log text and user-entered trigger text comparing the same way.
 local function SafeLower(value)
   if not value then
     return ""
@@ -127,10 +129,12 @@ local TRACKED_DEBUFF_CATALOG = {
 -- Triggers.lua owns both runtime trigger handlers and the metadata that drives the editor UI.
 -- The goal is that adding a trigger type means defining behavior once and letting the config
 -- window render its fields automatically from the descriptor.
+-- Tracked debuff definitions are the lookup source for saved hostile debuff timers.
 function TwAuras:GetTrackedDebuffDefinition(name)
   return TRACKED_DEBUFF_CATALOG[SafeLower(name)]
 end
 
+-- Buff ownership keys use the same target-name plus aura-name convention as debuff timers.
 function TwAuras:GetTrackedBuffKey(targetName, buffName)
   return SafeLower(targetName) .. "::" .. SafeLower(buffName)
 end
@@ -145,6 +149,7 @@ function TwAuras:GetTrackedBuff(unit, buffName)
   return self.runtime.trackedBuffs[key]
 end
 
+-- Pending buff casts bridge cast messages and later gain messages in the old text combat log.
 function TwAuras:SnapshotPendingBuffCast(spellName, targetName)
   if not spellName or spellName == "" then
     return
@@ -156,6 +161,7 @@ function TwAuras:SnapshotPendingBuffCast(spellName, targetName)
   }
 end
 
+-- Pending casts expire quickly so unrelated future gains do not inherit stale ownership context.
 function TwAuras:GetPendingBuffCast(spellName, targetName)
   local key = SafeLower(spellName)
   local pending = self.runtime.pendingBuffCasts[key]
@@ -172,6 +178,7 @@ function TwAuras:GetPendingBuffCast(spellName, targetName)
   return pending
 end
 
+-- Only auras that depend on player ownership are refreshed when tracked buff state changes.
 function TwAuras:RefreshTrackedBuffAuras(buffName)
   local wanted = SafeLower(buffName)
   local auras = self:GetAuraList()
@@ -192,6 +199,7 @@ function TwAuras:RefreshTrackedBuffAuras(buffName)
   end
 end
 
+-- Starting a tracked buff records ownership for later source-filtered buff triggers.
 function TwAuras:StartTrackedBuff(targetName, spellName)
   local key
   local entry
@@ -211,6 +219,7 @@ function TwAuras:StartTrackedBuff(targetName, spellName)
   return entry
 end
 
+-- Clearing tracked buffs removes ownership-only runtime state and lets matching auras fall inactive.
 function TwAuras:ClearTrackedBuff(targetName, spellName)
   local key
   if not targetName or targetName == "" or not spellName or spellName == "" then
@@ -223,10 +232,12 @@ function TwAuras:ClearTrackedBuff(targetName, spellName)
   end
 end
 
+-- Debuff ownership keys match the buff key model so both systems can be counted and debugged uniformly.
 function TwAuras:GetTrackedDebuffKey(targetName, debuffName)
   return SafeLower(targetName) .. "::" .. SafeLower(debuffName)
 end
 
+-- Tracked debuff lookup also lazily expires stale entries so callers do not need separate cleanup code.
 function TwAuras:GetTrackedDebuff(unit, debuffName)
   local unitName = unit and UnitName(unit) or nil
   local key
@@ -248,6 +259,7 @@ function TwAuras:GetTrackedDebuff(unit, debuffName)
   return nil
 end
 
+-- Combo-point-dependent debuffs resolve their actual duration here before a timer is stored.
 function TwAuras:GetTrackedDebuffDuration(definition, comboPoints)
   local points = comboPoints or 0
   if definition and definition.comboDurations then
@@ -264,6 +276,7 @@ function TwAuras:GetTrackedDebuffDuration(definition, comboPoints)
   return definition and definition.duration or 0, points
 end
 
+-- Pending debuff casts snapshot the spell intent before the old client spends combo points.
 function TwAuras:GetPendingDebuffCast(spellName, targetName)
   local key = SafeLower(spellName)
   local pending = self.runtime.pendingDebuffCasts[key]
@@ -280,6 +293,7 @@ function TwAuras:GetPendingDebuffCast(spellName, targetName)
   return pending
 end
 
+-- Debuff snapshots are primed from cast-start lines so finishers keep the right combo-point context.
 function TwAuras:SnapshotPendingDebuffCast(spellName)
   local definition = self:GetTrackedDebuffDefinition(spellName)
   local targetName = UnitName("target")
@@ -294,6 +308,7 @@ function TwAuras:SnapshotPendingDebuffCast(spellName)
   }
 end
 
+-- Tracked debuff refreshes are scoped to matching auras so combat-log spam stays cheap.
 function TwAuras:RefreshTrackedDebuffAuras(debuffName)
   local wanted = SafeLower(debuffName)
   local auras = self:GetAuraList()
@@ -314,6 +329,7 @@ function TwAuras:RefreshTrackedDebuffAuras(debuffName)
   end
 end
 
+-- Starting a tracked debuff reconstructs a timer from combat-log text when target APIs lack durations.
 function TwAuras:StartTrackedDebuff(targetName, spellName, fromTick)
   local definition = self:GetTrackedDebuffDefinition(spellName)
   local pending = self:GetPendingDebuffCast(spellName, targetName)
@@ -363,6 +379,7 @@ function TwAuras:ClearTrackedDebuff(targetName, spellName)
   end
 end
 
+-- Player-applied debuffs are reconstructed from old text combat-log patterns.
 function TwAuras:TrackPlayerDebuffsFromCombatLog(message)
   -- Target debuff timers are reconstructed from combat-log text because Vanilla/Turtle does not
   -- reliably expose exact hostile target aura durations the way modern WoW does.
@@ -412,6 +429,7 @@ function TwAuras:TrackPlayerDebuffsFromCombatLog(message)
   end
 end
 
+-- Player-applied buffs are also reconstructed from combat-log text so source ownership can be inferred.
 function TwAuras:TrackPlayerBuffsFromCombatLog(message)
   local lowerMessage = SafeLower(message)
   local spellName
@@ -473,6 +491,7 @@ end
 
 
 -- Hostility checks need a fallback because Vanilla APIs are limited compared to modern WoW.
+-- Fallback hostility checks are only used when simpler unit APIs are missing.
 local function UnitIsHostileFallback(unit)
   if not UnitExists(unit) then
     return false
@@ -483,6 +502,7 @@ local function UnitIsHostileFallback(unit)
   return false
 end
 
+-- Text helpers keep exact-match and contains-match behavior explicit for combat-log triggers.
 local function TextMatches(actual, expected)
   local wanted = SafeLower(expected)
   if wanted == "" then
@@ -499,6 +519,7 @@ local function TextContains(actual, expected)
   return string.find(SafeLower(actual), wanted, 1, true) ~= nil
 end
 
+-- Source text extraction feeds both trigger state and the %source dynamic token.
 local function GetCombatLogSourceText(message)
   local source = string.match(message, "^(.+) begins to cast ")
     or string.match(message, "^(.+) begins to perform ")
@@ -515,6 +536,7 @@ local function GetCombatLogSourceText(message)
   return ""
 end
 
+-- Runtime timer cleanup preserves bookkeeping flags while resetting the active timing data.
 local function ClearRuntimeTimerKeepFlags(timer)
   if not timer then
     return
@@ -526,6 +548,7 @@ local function ClearRuntimeTimerKeepFlags(timer)
   timer.icon = timer.icon or nil
 end
 
+-- Internal cooldowns are stored as ordinary timers so icon, bar, and sound systems can reuse them.
 local function StartInternalCooldown(self, runtimeKey, duration, icon, label, source)
   local timer = self:GetAuraRuntime(runtimeKey)
   if timer.expirationTime and timer.expirationTime > GetTime() then
@@ -536,10 +559,12 @@ local function StartInternalCooldown(self, runtimeKey, duration, icon, label, so
   return timer
 end
 
+-- Spellbook helpers isolate Vanilla lookup quirks from the actual trigger handlers.
 local function GetSpellBookType()
   return BOOKTYPE_SPELL or "spell"
 end
 
+-- Cooldown windows normalize API start/duration pairs into the fields TwAuras renders and compares.
 local function GetCooldownWindow(startTime, duration)
   local startValue = tonumber(startTime) or 0
   local durationValue = tonumber(duration) or 0
@@ -549,6 +574,7 @@ local function GetCooldownWindow(startTime, duration)
   return durationValue, startValue + durationValue, math.max((startValue + durationValue) - GetTime(), 0)
 end
 
+-- Spellbook lookup by name underpins cooldown, icon, and spell-known style triggers.
 function TwAuras:FindSpellBookSlot(spellName)
   -- Several trigger types still depend on spellbook slot APIs on 1.12, so name-to-slot lookup
   -- lives in one helper instead of being repeated in every cooldown or known-spell trigger.
@@ -582,6 +608,7 @@ function TwAuras:GetSpellTextureByName(spellName)
   return nil
 end
 
+-- Form textures are resolved separately because shapeshift forms do not live in the normal spellbook list.
 function TwAuras:GetFormTextureByName(formName)
   local wanted = SafeLower(formName)
   local count = GetNumShapeshiftForms and GetNumShapeshiftForms() or 0
@@ -598,6 +625,7 @@ function TwAuras:GetFormTextureByName(formName)
   return nil
 end
 
+-- Preview icons give the aura list and editor a sensible icon even without an explicit iconPath.
 function TwAuras:GetTriggerPreviewIcon(trigger)
   local triggerType = SafeLower(trigger and trigger.type or "")
   if not trigger or triggerType == "" or triggerType == "none" then
@@ -634,6 +662,7 @@ function TwAuras:GetTriggerPreviewIcon(trigger)
   return nil
 end
 
+-- Aura list previews prefer an explicit display icon, then fall back to the first useful trigger icon.
 function TwAuras:GetAuraListPreviewIcon(aura)
   local i
   if aura and aura.display and aura.display.iconPath and aura.display.iconPath ~= "" then
@@ -648,6 +677,7 @@ function TwAuras:GetAuraListPreviewIcon(aura)
   return nil
 end
 
+-- Spell cooldown info wraps lookup, icon, and remaining-time math into one trigger-friendly table.
 function TwAuras:GetSpellCooldownInfo(spellName)
   local index = self:FindSpellBookSlot(spellName)
   local bookType = GetSpellBookType()
@@ -685,6 +715,7 @@ function TwAuras:GetSpellCooldownInfo(spellName)
   }
 end
 
+-- Spell usability combines range, resource, and cooldown state for richer ready/not-ready triggers.
 function TwAuras:GetSpellUsableInfo(spellName)
   local index = self:FindSpellBookSlot(spellName)
   local bookType = GetSpellBookType()
@@ -734,6 +765,7 @@ function TwAuras:GetSpellUsableInfo(spellName)
   }
 end
 
+-- Equipped-item cooldowns are slot based, so slot normalization happens here once.
 function TwAuras:GetInventoryCooldownInfo(slot)
   local numericSlot = tonumber(slot)
   local texture = nil
@@ -770,6 +802,7 @@ function TwAuras:GetInventoryCooldownInfo(slot)
   }
 end
 
+-- Bag cooldown tracking scans bags by name and returns the first matching item's cooldown state.
 function TwAuras:GetBagItemCooldownInfo(itemName)
   local wanted = SafeLower(itemName)
   local bag
@@ -822,6 +855,7 @@ function TwAuras:GetBagItemCooldownInfo(itemName)
   return nil
 end
 
+-- Equipped item info powers both "item equipped" checks and slot-aware icon previews.
 function TwAuras:GetEquippedItemInfo(itemName, wantedSlot)
   local wanted = SafeLower(itemName)
   local slotMode = SafeLower(wantedSlot or "any")
@@ -858,6 +892,7 @@ function TwAuras:GetEquippedItemInfo(itemName, wantedSlot)
   }
 end
 
+-- Active form info is normalized once so stance triggers do not repeat spellbook and form scans.
 function TwAuras:GetActiveFormInfo()
   local count = GetNumShapeshiftForms and GetNumShapeshiftForms() or 0
   local index
@@ -879,6 +914,7 @@ function TwAuras:IsSpellKnown(spellName)
   return self:FindSpellBookSlot(spellName) ~= nil
 end
 
+-- Zone info prefers Turtle/modern helpers when present, then falls back to older Vanilla text APIs.
 function TwAuras:GetZoneInfo()
   local zoneName = GetRealZoneText and GetRealZoneText()
   if not zoneName or zoneName == "" then
@@ -890,6 +926,7 @@ function TwAuras:GetZoneInfo()
   }
 end
 
+-- Action usability mirrors spell usability, but uses action-bar slots as the source of truth.
 function TwAuras:GetActionUsableInfo(slot)
   local numericSlot = tonumber(slot)
   local isUsable
@@ -936,6 +973,7 @@ function TwAuras:GetActionUsableInfo(slot)
   }
 end
 
+-- Weapon enchant info is normalized so main-hand, off-hand, and either-hand triggers share one path.
 function TwAuras:GetWeaponEnchantInfoForTrigger(hand)
   if not GetWeaponEnchantInfo then
     return nil
@@ -979,6 +1017,7 @@ function TwAuras:GetWeaponEnchantInfoForTrigger(hand)
   return build("mainhand", hasMain, mainExpiration, mainCharges)
 end
 
+-- Bag item counts prefer GetItemCount, then fall back to a manual bag scan on older clients.
 function TwAuras:GetBagItemCountByName(itemName)
   local wanted = SafeLower(itemName)
   local total = 0
@@ -1020,6 +1059,7 @@ function TwAuras:GetBagItemCountByName(itemName)
   return total
 end
 
+-- Range checks can come from interact-distance or action-slot range depending on the trigger config.
 function TwAuras:GetRangeInfo(trigger)
   local unit = trigger.rangeUnit or "target"
   local mode = trigger.rangeMode or "action"
@@ -1045,6 +1085,7 @@ function TwAuras:GetRangeInfo(trigger)
   }
 end
 
+-- Threat detection falls back through multiple APIs so it still works on older clients.
 function TwAuras:PlayerHasAggro()
   if UnitThreatSituation then
     return (UnitThreatSituation("player", "target") or 0) > 0
@@ -1062,6 +1103,7 @@ function TwAuras:PlayerHasAggro()
   return false
 end
 
+-- Player state combines native APIs and stealth-buff scanning for better 1.12 coverage.
 function TwAuras:GetPlayerStateActive(stateName)
   local wanted = SafeLower(stateName or "mounted")
   if wanted == "resting" then
@@ -1099,6 +1141,7 @@ function TwAuras:GetPlayerStateActive(stateName)
   return false
 end
 
+-- Group state is summarized once so party/raid/solo triggers stay cheap.
 function TwAuras:GetGroupStateInfo()
   local raidCount = GetNumRaidMembers and (GetNumRaidMembers() or 0) or 0
   local partyCount = GetNumPartyMembers and (GetNumPartyMembers() or 0) or 0
@@ -1111,6 +1154,7 @@ end
 
 
 -- Aura scanning is tooltip-backed so named buff/debuff tracking works on 1.12 APIs.
+-- Aura scanning returns a normalized state-like table so buff/debuff triggers can share downstream code.
 function TwAuras:ScanAura(unit, auraName, isDebuff)
   -- Hidden tooltip reads are the compatibility trick that lets us match by displayed aura name
   -- on the old client, where buff/debuff APIs do not always give us that directly.
@@ -1236,6 +1280,7 @@ function TwAuras:ApplyEstimatedDuration(aura, state)
 end
 
 -- Numeric triggers can compare either raw values or percentages from the same config field.
+-- Resource and value triggers all return the same numeric fields so conditions and text tokens can reuse them.
 function TwAuras:EvaluateNumericTrigger(trigger, value, maxValue, label)
   local compareValue = value
   if trigger.valueMode == "percent" then
@@ -1256,13 +1301,29 @@ function TwAuras:EvaluateNumericTrigger(trigger, value, maxValue, label)
   }
 end
 
+-- Single-trigger evaluation applies generic post-processing like invert and track-missing.
 function TwAuras:EvaluateSingleTrigger(aura, trigger)
   if not trigger or not trigger.type then
     return { active = false }
   end
 
   local handler = self:GetTriggerType(trigger.type)
-  local state = handler and handler(self, aura, trigger) or { active = false }
+  local state = { active = false }
+  if handler then
+    local ok, result = pcall(handler, self, aura, trigger)
+    if ok and type(result) == "table" then
+      state = result
+    elseif not ok then
+      if self:IsAuraDebugEnabled(aura, "trigger") then
+        self:DebugLog(aura, "trigger", (trigger.type or "unknown") .. " error: " .. tostring(result))
+      end
+      state = { active = false, label = trigger.type or "trigger" }
+    end
+  else
+    if self:IsAuraDebugEnabled(aura, "trigger") then
+      self:DebugLog(aura, "trigger", "missing handler for " .. tostring(trigger.type))
+    end
+  end
 
   if trigger.trackMissing and (trigger.type == "buff" or trigger.type == "debuff") then
     local wasActive = state.active
@@ -1277,10 +1338,15 @@ function TwAuras:EvaluateSingleTrigger(aura, trigger)
     state.active = not state.active
   end
 
+  if self:IsAuraDebugEnabled(aura, "trigger") then
+    self:DebugLog(aura, "trigger", tostring(trigger.type or "trigger") .. " active=" .. tostring(state.active and true or false))
+  end
+
   return state
 end
 
 -- Multiple triggers combine into one region state using all/any/priority rules.
+-- Trigger aggregation converts multiple raw states into one rendered aura state.
 function TwAuras:EvaluateTrigger(aura)
   -- Each trigger produces its own raw state first. Only after that do we apply the aura's
   -- all/any/priority rule to decide the single state the region should render.
@@ -1342,6 +1408,7 @@ end
 
 -- The handlers below intentionally stay small and answer only "what is this trigger's raw state?"
 -- Combination logic, inversion, and normalization all happen in shared code above.
+-- Individual trigger handlers below convert one trigger config into one normalized state object.
 local function BuffTriggerHandler(self, aura, trigger)
   local state = self:ScanAura(trigger.unit or "player", trigger.auraName, false)
   local tracked = nil
@@ -1362,6 +1429,7 @@ local function BuffTriggerHandler(self, aura, trigger)
   return self:ApplyEstimatedDuration(aura, state)
 end
 
+-- Debuff handlers can use either direct scans or saved combat-log timers depending on trigger settings.
 local function DebuffTriggerHandler(self, aura, trigger)
   -- Debuff triggers can blend a live aura scan with a combat-log tracked timer. This is what
   -- makes target debuff countdowns usable on the old client.
@@ -1414,6 +1482,7 @@ local function DebuffTriggerHandler(self, aura, trigger)
   return self:ApplyEstimatedDuration(aura, state)
 end
 
+-- Resource-based handlers all normalize into the same numeric state shape for conditions and text.
 local function PowerTriggerHandler(self, _, trigger)
   local unit = trigger.unit or "player"
   local value = UnitMana(unit) or 0
@@ -1433,6 +1502,7 @@ local function HealthTriggerHandler(self, _, trigger)
   return self:EvaluateNumericTrigger(trigger, value, maxValue, "Health")
 end
 
+-- Tick and five-second-rule handlers are predictive timers rather than direct aura scans.
 local function EnergyTickTriggerHandler(self, _, trigger)
   local info = self:GetEnergyTickInfo()
   local remaining = info.remaining or 0
@@ -1477,10 +1547,13 @@ local function ManaRegenTriggerHandler(self, _, trigger)
   }
 end
 
+-- Simple boolean/status handlers stay intentionally tiny and return only the fields they need.
+-- The combat trigger is intentionally simple: it only reflects the player's current combat flag.
 local function CombatTriggerHandler()
   return { active = UnitAffectingCombat("player") and true or false, label = "Combat" }
 end
 
+-- Target existence and hostility are split so users can combine them independently in multi-trigger auras.
 local function TargetExistsTriggerHandler(_, _, trigger)
   local unit = trigger.unit or "target"
   return { active = UnitExists(unit) and true or false, label = unit .. " exists" }
@@ -1491,6 +1564,7 @@ local function TargetHostileTriggerHandler(_, _, trigger)
   return { active = UnitIsHostileFallback(unit), label = unit .. " hostile" }
 end
 
+-- Combat-log-like handlers reuse recent log capture and cast snapshots to build transient timer states.
 local function CombatLogTriggerHandler(self, aura)
   local runtimeKey = self:GetTriggerRuntimeKey(aura, aura.trigger)
   local timer = self:GetAuraRuntime(runtimeKey)
@@ -1581,6 +1655,7 @@ local function InternalCooldownTriggerHandler(self, aura, trigger)
   }
 end
 
+-- Cooldown and usability handlers expose ready/cooling/not-enough-resource style states to the UI.
 local function CooldownTriggerHandler(self, _, trigger)
   -- Cooldown triggers report more than a boolean so the same trigger can drive a bar, icon, or
   -- text display without any display-specific cooldown logic.
@@ -1702,6 +1777,8 @@ local function BagItemCooldownTriggerHandler(self, _, trigger)
   }
 end
 
+-- Form, casting, pet, and world-state handlers cover high-level status checks without timing logic.
+-- Form triggers match either a named form or "any active form" when the field is left blank.
 local function FormTriggerHandler(self, _, trigger)
   local activeForm = self:GetActiveFormInfo()
   local wanted = trigger.formName or ""
@@ -1754,6 +1831,7 @@ local function CastingTriggerHandler(self, _, trigger)
   }
 end
 
+-- Pet triggers only answer whether a pet exists right now; they do not inspect pet auras or actions.
 local function PetTriggerHandler()
   local active = UnitExists("pet") and true or false
   return {
@@ -1763,6 +1841,7 @@ local function PetTriggerHandler()
   }
 end
 
+-- Zone triggers can match either the main zone or the current sub-zone depending on the toggle.
 local function ZoneTriggerHandler(self, _, trigger)
   local info = self:GetZoneInfo()
   local wantedZone = SafeLower(trigger.zoneName or "")
@@ -1788,6 +1867,7 @@ local function ZoneTriggerHandler(self, _, trigger)
   }
 end
 
+-- Spell-known triggers are simple spellbook presence checks for talent/spec-like gating.
 local function SpellKnownTriggerHandler(self, _, trigger)
   local known = self:IsSpellKnown(trigger.spellName)
   return {
@@ -1859,6 +1939,7 @@ local function WeaponEnchantTriggerHandler(self, _, trigger)
   }
 end
 
+-- Item-equipped triggers are boolean equipment checks with icon support for preview and display.
 local function ItemEquippedTriggerHandler(self, _, trigger)
   local info = self:GetEquippedItemInfo(trigger.itemName, trigger.equipmentSlot)
   if not info then
@@ -1872,6 +1953,7 @@ local function ItemEquippedTriggerHandler(self, _, trigger)
   }
 end
 
+-- Item-count triggers are inventory-count checks rather than cooldown or equipment checks.
 local function ItemCountTriggerHandler(self, _, trigger)
   local count = self:GetBagItemCountByName(trigger.itemName)
   return {
@@ -1883,6 +1965,7 @@ local function ItemCountTriggerHandler(self, _, trigger)
   }
 end
 
+-- Range triggers collapse action-range and interact-distance checks into a single in/out-of-range state.
 local function RangeTriggerHandler(self, _, trigger)
   local info = self:GetRangeInfo(trigger)
   local inRange = info and info.inRange and true or false
@@ -1895,6 +1978,7 @@ local function RangeTriggerHandler(self, _, trigger)
   }
 end
 
+-- Threat triggers intentionally answer "do I currently have aggro?" rather than trying to expose threat percent.
 local function ThreatTriggerHandler(self, _, trigger)
   local hasAggro = self:PlayerHasAggro()
   local active = trigger.threatState == "notaggro" and not hasAggro or hasAggro
@@ -1906,6 +1990,7 @@ local function ThreatTriggerHandler(self, _, trigger)
   }
 end
 
+-- Player-state triggers cover mounted, resting, stealth, and any future high-level player state flags.
 local function PlayerStateTriggerHandler(self, _, trigger)
   local stateName = trigger.stateName or "mounted"
   local active = self:GetPlayerStateActive(stateName)
@@ -1916,6 +2001,7 @@ local function PlayerStateTriggerHandler(self, _, trigger)
   }
 end
 
+-- Group-state triggers summarize solo/party/raid/grouped checks into one simple boolean state.
 local function GroupStateTriggerHandler(self, _, trigger)
   local info = self:GetGroupStateInfo()
   local wanted = SafeLower(trigger.groupState or "solo")
@@ -1938,6 +2024,7 @@ local function GroupStateTriggerHandler(self, _, trigger)
   }
 end
 
+-- Always/none are sentinel trigger types used for simple displays and dynamic editor rows.
 local function AlwaysTriggerHandler(_, aura)
   return { active = true, label = aura.name }
 end
@@ -1946,6 +2033,7 @@ local function NoneTriggerHandler()
   return { active = false, label = "" }
 end
 
+-- Health and mana estimate parsing only runs when an aura actually uses the matching dynamic tokens.
 function TwAuras:TrackTargetHealthEstimateFromCombatLog(message)
   local targetName, damage
   if not message or message == "" then
@@ -2016,6 +2104,7 @@ end
 -- Descriptor metadata below serves two jobs:
 -- 1. register the runtime handler
 -- 2. tell Config.lua which fields and update events belong to that trigger type
+-- Recent combat-log recording fans one raw message out to timers, estimates, and generic log triggers.
 function TwAuras:RecordCombatLog(chatEvent, message)
   -- Chat-based combat-log parsing feeds both debug output and timer-style trigger activation.
   -- This keeps all text-match trigger behavior in one place.

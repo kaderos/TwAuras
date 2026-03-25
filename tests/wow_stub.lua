@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.11
+-- TwAuras file version: 0.1.14
 local stub = {}
 
 local currentTime = 0
@@ -36,6 +36,10 @@ local zoneInfo = {
   zone = "Darnassus",
   subZone = "",
 }
+local instanceInfo = {
+  inInstance = false,
+  instanceType = "none",
+}
 local actionSlots = {}
 local weaponEnchantState = nil
 local restingState = false
@@ -47,20 +51,24 @@ local playedSounds = {}
 local tooltipAuraName = nil
 local cvars = {}
 
+-- Tests freely invent units, so the stub creates them lazily instead of enforcing a fixed roster.
 local function ensureUnit(unit)
   unitData[unit] = unitData[unit] or {}
   return unitData[unit]
 end
 
+-- No-op functions make it cheap to emulate UI objects without implementing every frame method.
 local function noop()
 end
 
+-- Fake frames only implement the methods the addon or tests actually touch.
 local function makeFrame()
   local frame = {
     scripts = {},
     events = {},
     width = 0,
     height = 0,
+    points = {},
   }
 
   function frame:SetScript(name, fn)
@@ -104,8 +112,16 @@ local function makeFrame()
   function frame:SetHeight(value) self.height = value or 0 end
   function frame:GetWidth() return self.width or 0 end
   function frame:GetHeight() return self.height or 0 end
-  function frame:ClearAllPoints() end
-  function frame:SetPoint() end
+  function frame:SetText(value) self.text = value end
+  function frame:GetText() return self.text or "" end
+  function frame:SetScrollChild(child) self.scrollChild = child end
+  function frame:SetAutoFocus() end
+  function frame:ClearAllPoints()
+    self.points = {}
+  end
+  function frame:SetPoint(point, relativeTo, relativePoint, xOfs, yOfs)
+    self.points[1] = { point, relativeTo, relativePoint, xOfs, yOfs }
+  end
   function frame:SetAllPoints() end
   function frame:SetBackdrop() end
   function frame:SetBackdropColor() end
@@ -125,6 +141,10 @@ local function makeFrame()
   function frame:StopMovingOrSizing() end
   function frame:SetCooldown() end
   function frame:GetPoint()
+    local point = self.points[1]
+    if point then
+      return point[1], point[2], point[3], point[4], point[5]
+    end
     return "CENTER", nil, "CENTER", 0, 0
   end
   function frame:IsShown()
@@ -134,6 +154,7 @@ local function makeFrame()
   return frame
 end
 
+-- Installing the stub populates the small slice of WoW API that TwAuras currently depends on.
 function stub.install()
   -- The stub only implements the WoW APIs the current test suite actually touches.
   -- When new runtime features appear, extend this narrowly so the tests stay honest.
@@ -334,6 +355,10 @@ function stub.install()
     return zoneInfo.zone
   end
 
+  _G.IsInInstance = function()
+    return instanceInfo.inInstance and true or false, instanceInfo.instanceType
+  end
+
   _G.GetZoneText = function()
     return zoneInfo.zone
   end
@@ -484,6 +509,8 @@ function stub.install()
   }
 end
 
+-- The rest of the helpers are simple setters/getters so individual tests can describe just the
+-- world state they care about.
 function stub.set_time(value)
   currentTime = value
 end
@@ -552,6 +579,11 @@ end
 function stub.set_zone(zoneName, subZoneName)
   zoneInfo.zone = zoneName or ""
   zoneInfo.subZone = subZoneName or ""
+end
+
+function stub.set_instance(inInstance, instanceType)
+  instanceInfo.inInstance = inInstance and true or false
+  instanceInfo.instanceType = instanceType or "none"
 end
 
 function stub.set_action(slot, values)

@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.23
+-- TwAuras file version: 0.1.26
 -- Addon bootstrap, defaults, and frame event wiring.
 local addonName = "TwAuras"
 
@@ -23,6 +23,7 @@ TwAuras = {
     targetHealthEstimates = {},
     targetManaEstimates = {},
     auraAudio = {},
+    debugLog = {},
     energyTick = {},
     manaFiveSecondRule = {},
     lastPlayerComboPoints = 0,
@@ -126,6 +127,12 @@ TwAuras = {
             inCombat = false,
             class = nil,
             requireTarget = false,
+            allowWorld = true,
+            allowDungeon = true,
+            allowRaid = true,
+            allowPvp = true,
+            allowArena = true,
+            zoneText = "",
             updateEvents = "",
           },
           position = {
@@ -214,6 +221,12 @@ TwAuras = {
             inCombat = false,
             class = "ROGUE",
             requireTarget = false,
+            allowWorld = true,
+            allowDungeon = true,
+            allowRaid = true,
+            allowPvp = true,
+            allowArena = true,
+            zoneText = "",
             updateEvents = "",
           },
           position = {
@@ -231,6 +244,8 @@ TwAuras = {
 -- These default auras also serve as concrete examples of the saved-data format that the editor
 -- and runtime normalize around.
 -- Slash commands open the main tabbed editor directly so users land in the real aura-building UI.
+-- The floating object tracker reuses the same summary logic as the config footer so the
+-- debugging numbers stay identical in and out of the editor.
 function TwAuras:RefreshObjectTracker()
   if not self.objectTrackerFrame or not self.objectTrackerFrame:IsShown() then
     return
@@ -251,6 +266,7 @@ function TwAuras:RefreshObjectTracker()
   end
 end
 
+-- Combat log range defaults improve the reliability of combat-log-driven triggers on TurtleWoW.
 function TwAuras:ApplyCombatLogRangeDefaults()
   local rangeTargets = {
     "Party",
@@ -270,6 +286,7 @@ function TwAuras:ApplyCombatLogRangeDefaults()
   end
 end
 
+-- The tracker frame is created lazily so normal users do not pay for extra UI until they ask for it.
 function TwAuras:EnsureObjectTrackerFrame()
   if self.objectTrackerFrame then
     return self.objectTrackerFrame
@@ -322,6 +339,7 @@ function TwAuras:EnsureObjectTrackerFrame()
   return frame
 end
 
+-- Toggling keeps the slash command simple and lets the same frame be reused for the whole session.
 function TwAuras:ToggleObjectTracker()
   local frame = self:EnsureObjectTrackerFrame()
   if frame:IsShown() then
@@ -332,6 +350,7 @@ function TwAuras:ToggleObjectTracker()
   self:RefreshObjectTracker()
 end
 
+-- Slash parsing stays intentionally tiny: either toggle the object tracker or open the config.
 function TwAuras:HandleSlashCommand(msg)
   local trimmed = string.lower(string.gsub(msg or "", "^%s*(.-)%s*$", "%1"))
   if trimmed == "obj" then

@@ -1,5 +1,6 @@
--- TwAuras file version: 0.1.40
+-- TwAuras file version: 0.1.43
 -- Shared table helpers keep saved variables compatible as defaults evolve.
+-- Defaults are copied recursively so adding new saved fields never wipes a user's profile.
 local function CopyDefaults(src, dst)
   if type(src) ~= "table" then
     return dst
@@ -27,10 +28,12 @@ local function SafeLower(value)
   return string.lower(value)
 end
 
+-- Boolean normalization collapses Lua's truthy values into explicit true/false flags for storage.
 local function NormalizeBool(value)
   return value and true or false
 end
 
+-- Deep-copy helpers are used for duplication and migrations where saved aura tables must not alias.
 local function DeepCopy(value)
   if type(value) ~= "table" then
     return value
@@ -43,6 +46,7 @@ local function DeepCopy(value)
   return copy
 end
 
+-- Condition comparisons intentionally mirror trigger operators so the UI can reuse the same language.
 local function CompareConditionValue(value, op, threshold)
   if op == "<" then return value < threshold end
   if op == "<=" then return value <= threshold end
@@ -53,6 +57,7 @@ local function CompareConditionValue(value, op, threshold)
   return false
 end
 
+-- Summaries and labels are truncated centrally so list rows and tooltip text stay consistent.
 local function TruncateText(value, maxLength)
   local text = value or ""
   local limit = tonumber(maxLength) or 252
@@ -181,6 +186,7 @@ function TwAuras:GetRegionType(name)
   return self.Private.regionTypes[SafeLower(name)]
 end
 
+-- Sorted registry keys keep dropdowns stable between sessions instead of depending on table order.
 function TwAuras:GetSortedRegistryKeys(registry)
   local keys = {}
   local key
@@ -199,11 +205,13 @@ function TwAuras:GetAvailableRegionTypes()
   return self:GetSortedRegistryKeys(self.Private.regionTypes)
 end
 
+-- Event key normalization lets old aliases, editor text, and raw WoW events converge on one map.
 function TwAuras:NormalizeEventKey(value)
   local key = SafeLower(value or "")
   return EVENT_KEY_ALIASES[key] or key
 end
 
+-- Comma-separated load and update-event fields are parsed once here and reused elsewhere.
 function TwAuras:SplitList(value)
   local items = {}
   local text = value or ""
@@ -231,6 +239,7 @@ function TwAuras:GetTriggerEventKeys(trigger)
 end
 
 -- Trigger list helpers keep the editor's dynamic multi-trigger model stable.
+-- Trigger defaults define the editor's baseline shape for every newly created trigger row.
 function TwAuras:CreateDefaultTrigger()
   return {
     type = "buff",
@@ -279,6 +288,7 @@ function TwAuras:CreateDefaultTrigger()
   }
 end
 
+-- Disabled triggers are explicit placeholders so the editor can keep one trailing blank row.
 function TwAuras:CreateDisabledTrigger()
   local trigger = self:CreateDefaultTrigger()
   trigger.type = "none"
@@ -286,6 +296,7 @@ function TwAuras:CreateDisabledTrigger()
   return trigger
 end
 
+-- Condition defaults seed the condition editor with a usable threshold rule and visual overrides.
 function TwAuras:CreateDefaultCondition()
   return {
     enabled = true,
@@ -308,12 +319,23 @@ function TwAuras:CreateDefaultCondition()
   }
 end
 
+-- Sound defaults keep lifecycle audio fields present even on older saved auras.
 function TwAuras:CreateDefaultSoundActions()
   return {
     startSound = "",
     activeSound = "",
     activeInterval = 2,
     stopSound = "",
+  }
+end
+
+-- Debug flags are stored per aura so one noisy setup does not force chat spam for all auras.
+function TwAuras:CreateDefaultDebugOptions()
+  return {
+    display = false,
+    trigger = false,
+    conditions = false,
+    load = false,
   }
 end
 
@@ -375,6 +397,7 @@ function TwAuras:MoveCondition(aura, index, direction)
   self.db.selectedConditionIndex = newIndex
 end
 
+-- Blank-trigger detection is what keeps dynamic trigger rows from multiplying forever in the editor.
 function TwAuras:IsBlankTrigger(trigger)
   return not trigger or not trigger.type or trigger.type == "none"
 end
@@ -473,6 +496,7 @@ function TwAuras:GetDefaultAuraTemplate()
     or {}
 end
 
+-- The aura store is the canonical persistent layout used for backup, duplication, and ordering.
 function TwAuras:GetAuraStore()
   if not self.db then
     return nil
@@ -492,7 +516,8 @@ function TwAuras:BuildAuraRecordKey(id)
   return "aura_" .. tostring(id or 0)
 end
 
-function TwAuras:GetUniqueAuraName(name)
+-- User-visible names stay unique so duplicated auras and list rows remain distinguishable.
+function TwAuras:GetUniqueAuraName(name, excludeId)
   local auras = self:GetAuraList()
   local wanted = name or "New Aura"
   local base = string.gsub(wanted, "%d+$", "")
@@ -503,13 +528,15 @@ function TwAuras:GetUniqueAuraName(name)
     base = wanted
   end
   for i = 1, table.getn(auras) do
-    local auraName = auras[i].name or ""
-    if auraName == base then
-      hasBase = true
-    end
-    local suffix = string.match(auraName, "^" .. string.gsub(base, "([^%w])", "%%%1") .. "(%d+)$")
-    if suffix and tonumber(suffix) and tonumber(suffix) > maxSuffix then
-      maxSuffix = tonumber(suffix)
+    if auras[i].id ~= excludeId then
+      local auraName = auras[i].name or ""
+      if auraName == base then
+        hasBase = true
+      end
+      local suffix = string.match(auraName, "^" .. string.gsub(base, "([^%w])", "%%%1") .. "(%d+)$")
+      if suffix and tonumber(suffix) and tonumber(suffix) > maxSuffix then
+        maxSuffix = tonumber(suffix)
+      end
     end
   end
   if not hasBase and maxSuffix == 0 then
@@ -518,6 +545,7 @@ function TwAuras:GetUniqueAuraName(name)
   return base .. tostring(maxSuffix + 1)
 end
 
+-- Duplication clones the aura config but always assigns a fresh id, key, and collision-safe name.
 function TwAuras:DuplicateAuraRecord(aura)
   local copy
   if not aura then
@@ -535,6 +563,7 @@ function TwAuras:DuplicateAuraRecord(aura)
   return copy
 end
 
+-- Runtime timers only count when they can still affect visible auras or debug output.
 function TwAuras:GetActiveRuntimeTimerCount()
   local total = 0
   local now = GetTime()
@@ -550,6 +579,7 @@ function TwAuras:GetActiveRuntimeTimerCount()
   return total
 end
 
+-- Tracked runtime entries ignore expired placeholders so the object counter reflects live work.
 function TwAuras:GetTrackedRuntimeEntryCount(entries)
   local total = 0
   local now = GetTime()
@@ -570,6 +600,7 @@ function TwAuras:GetTrackedRuntimeEntryCount(entries)
   return total
 end
 
+-- Overlay counting treats each per-unit icon/glow state as a separate active object for debugging.
 function TwAuras:GetActiveOverlayCount()
   local total = 0
   local auras = self:GetAuraList()
@@ -583,6 +614,7 @@ function TwAuras:GetActiveOverlayCount()
   return total
 end
 
+-- The object summary breakdown powers both the footer and the floating tracker tooltip.
 function TwAuras:GetObjectSummaryBreakdown()
   local total = 0
   local auras = self:GetAuraList()
@@ -630,10 +662,12 @@ function TwAuras:GetObjectSummaryBreakdown()
   return breakdown
 end
 
+-- The total helper keeps callers simple when they only need the rolled-up number.
 function TwAuras:GetObjectSummaryCount()
   return self:GetObjectSummaryBreakdown().total
 end
 
+-- Tooltip text is generated from the same breakdown table so totals and categories cannot drift apart.
 function TwAuras:GetObjectSummaryTooltipText()
   local breakdown = self:GetObjectSummaryBreakdown()
   return "Object Breakdown\n"
@@ -648,6 +682,7 @@ function TwAuras:GetObjectSummaryTooltipText()
     .. "Total: " .. tostring(breakdown.total)
 end
 
+-- Load colors are a rough troubleshooting aid, not a hard performance guarantee.
 function TwAuras:GetObjectSummaryLoadColor(count)
   local total = tonumber(count) or 0
   if total <= 150 then
@@ -658,6 +693,7 @@ function TwAuras:GetObjectSummaryLoadColor(count)
   return 1.0, 0.32, 0.32
 end
 
+-- Debug displays are refreshed centrally so config and tracker stay in sync whenever state changes.
 function TwAuras:RefreshDebugObjectDisplays()
   if self.configFrame and self.configFrame:IsShown() and self.RefreshObjectSummary then
     self:RefreshObjectSummary()
@@ -667,6 +703,7 @@ function TwAuras:RefreshDebugObjectDisplays()
   end
 end
 
+-- Store migration upgrades legacy saved layouts into the compartmentalized auraStore model.
 function TwAuras:MigrateAuraStore()
   local store = self:GetAuraStore()
   local legacy = self.db and self.db.auras or nil
@@ -771,6 +808,7 @@ end
 
 -- Normalize edited and saved aura data before it is used anywhere else.
 -- This is the compatibility layer between old saves, live editor input, and runtime evaluation.
+-- Normalization is the compatibility layer between old saves, wizard presets, and live editor data.
 function TwAuras:NormalizeAuraConfig(aura)
   -- Normalization is the safety net between old saved data, live editor input, and runtime code.
   -- Every major subsystem assumes this has already run before it reads the aura.
@@ -787,8 +825,15 @@ function TwAuras:NormalizeAuraConfig(aura)
   aura.load = CopyDefaults(self:GetDefaultAuraTemplate().load, aura.load or {})
   aura.position = CopyDefaults(self:GetDefaultAuraTemplate().position, aura.position or {})
   aura.soundActions = CopyDefaults(self:CreateDefaultSoundActions(), aura.soundActions or {})
+  aura.debug = CopyDefaults(self:CreateDefaultDebugOptions(), aura.debug or {})
   aura.conditions = aura.conditions or {}
   aura.load.updateEvents = aura.load.updateEvents or ""
+  aura.load.zoneText = aura.load.zoneText or ""
+  aura.load.allowWorld = aura.load.allowWorld ~= false
+  aura.load.allowDungeon = aura.load.allowDungeon ~= false
+  aura.load.allowRaid = aura.load.allowRaid ~= false
+  aura.load.allowPvp = aura.load.allowPvp ~= false
+  aura.load.allowArena = aura.load.allowArena ~= false
   aura.display.width = tonumber(aura.display.width) or 36
   aura.display.height = tonumber(aura.display.height) or 36
   aura.display.alpha = tonumber(aura.display.alpha) or 1
@@ -1014,6 +1059,35 @@ function TwAuras:NormalizeAuraConfig(aura)
   end
 end
 
+-- Instance context is normalized here so load checks can stay old-client-safe and readable.
+function TwAuras:GetCurrentInstanceType()
+  if type(IsInInstance) == "function" then
+    local isInInstance, instanceType = IsInInstance()
+    if not isInInstance then
+      return "none"
+    end
+    instanceType = SafeLower(instanceType or "")
+    if instanceType == "party" or instanceType == "raid" or instanceType == "pvp" or instanceType == "arena" then
+      return instanceType
+    end
+  end
+  return "none"
+end
+
+-- Location-based load filters all depend on the same zone or instance context.
+function TwAuras:LoadUsesZoneContext(cfg)
+  if not cfg then
+    return false
+  end
+  if (cfg.zoneText or "") ~= "" then
+    return true
+  end
+  if cfg.allowWorld == false or cfg.allowDungeon == false or cfg.allowRaid == false or cfg.allowPvp == false or cfg.allowArena == false then
+    return true
+  end
+  return false
+end
+
 -- Trigger handlers can return sparse data; the core fills the common state shape.
 function TwAuras:NormalizeState(aura, state)
   if type(state) ~= "table" then
@@ -1037,6 +1111,7 @@ function TwAuras:NormalizeState(aura, state)
   return state
 end
 
+-- Frame-unit triggers are evaluated per unit, so they need special handling outside normal aura flow.
 function TwAuras:IsFrameUnitTrigger(trigger)
   return trigger and SafeLower(trigger.unit or "") == "partyunit"
 end
@@ -1051,6 +1126,7 @@ function TwAuras:AuraUsesFrameUnits(aura)
   return false
 end
 
+-- Scope helpers translate party/raid/both into the concrete unit ids the runtime can scan.
 function TwAuras:GetGroupUnitsForScope(scope)
   local units = {}
   local normalized = SafeLower(scope or "party")
@@ -1072,6 +1148,7 @@ function TwAuras:GetGroupUnitsForScope(scope)
   return units
 end
 
+-- Effective triggers are shallow trigger copies with the current per-unit override applied.
 function TwAuras:GetEffectiveTrigger(trigger, unitOverride)
   local copy
   local key
@@ -1086,6 +1163,7 @@ function TwAuras:GetEffectiveTrigger(trigger, unitOverride)
   return copy
 end
 
+-- Per-unit trigger evaluation is what lets one aura paint multiple party or raid overlays.
 function TwAuras:EvaluateTriggerForUnit(aura, unit)
   local triggers = aura and aura.triggers or nil
   local mode
@@ -1146,6 +1224,7 @@ function TwAuras:EvaluateTriggerForUnit(aura, unit)
   return aggregateState
 end
 
+-- Unitframe states return both the per-unit active list and a first-active aggregate summary.
 function TwAuras:BuildUnitFrameStates(aura)
   local units = self:GetGroupUnitsForScope(aura and aura.display and aura.display.frameScope or "party")
   local states = {}
@@ -1177,6 +1256,7 @@ function TwAuras:BuildPreviewUnitFrameStates(aura)
   return states
 end
 
+-- Tracking keys prefer GUIDs when available, then fall back to names for Vanilla-safe identity.
 function TwAuras:GetUnitTrackingKey(unit)
   local guid = UnitGUID and UnitGUID(unit)
   if guid and guid ~= "" then
@@ -1196,6 +1276,7 @@ function TwAuras:GetTargetNameTrackingKey(targetName)
   return SafeLower(targetName)
 end
 
+-- Health estimate entries accumulate damage observations until enough data exists for a max-HP guess.
 function TwAuras:GetTargetHealthEstimateEntryByKey(key, displayName)
   if not key or key == "" then
     return nil
@@ -1218,6 +1299,7 @@ function TwAuras:GetTargetHealthEstimateEntryByKey(key, displayName)
   return self.runtime.targetHealthEstimates[key]
 end
 
+-- Observed damage is bucketed between percent changes so estimates only update when there is signal.
 function TwAuras:AddObservedDamageToTarget(targetName, amount)
   local numericAmount = tonumber(amount) or 0
   local key = self:GetTargetNameTrackingKey(targetName)
@@ -1231,6 +1313,7 @@ function TwAuras:AddObservedDamageToTarget(targetName, amount)
   return entry
 end
 
+-- Health estimates combine percent drops and observed damage into a rolling best-fit max health.
 function TwAuras:UpdateEstimatedHealthForUnit(unit)
   local key = self:GetUnitTrackingKey(unit)
   local name = UnitName and UnitName(unit) or ""
@@ -1469,6 +1552,7 @@ function TwAuras:AnyAuraUsesEstimatedManaTokens()
   return false
 end
 
+-- Preferred real health values use exact client data first and fall back to the estimate system.
 function TwAuras:GetPreferredRealHealthValues(unit)
   local current = UnitHealth and UnitHealth(unit) or nil
   local maxValue = UnitHealthMax and UnitHealthMax(unit) or nil
@@ -1523,6 +1607,7 @@ function TwAuras:GetPreferredRealManaValues(unit)
   return nil
 end
 
+-- Conditions turn raw trigger state into display overrides without mutating the saved base config.
 function TwAuras:EvaluateCondition(condition, state)
   local value = 0
   local check = condition and condition.check or "active"
@@ -1547,14 +1632,25 @@ function TwAuras:EvaluateCondition(condition, state)
   return CompareConditionValue(value, condition.operator or "=", condition.threshold or 0)
 end
 
+-- Conditional resolution builds a temporary display snapshot for this refresh only.
 function TwAuras:ResolveConditionalState(aura, state)
   -- Conditions build a resolved display snapshot for the current state instead of mutating the
   -- saved display config. That makes conditional styling temporary and deterministic.
   local resolvedDisplay = CopyDefaults(aura.display or {}, {})
   local i
+  local matchedCount = 0
   for i = 1, table.getn(aura.conditions or {}) do
     local condition = aura.conditions[i]
-    if self:EvaluateCondition(condition, state) then
+    local ok, matched = pcall(self.EvaluateCondition, self, condition, state)
+    if not ok then
+      local err = matched
+      matched = false
+      if self:IsAuraDebugEnabled(aura, "conditions") then
+        self:DebugLog(aura, "conditions", "condition " .. tostring(i) .. " error: " .. tostring(err))
+      end
+    end
+    if matched then
+      matchedCount = matchedCount + 1
       if condition.useAlpha then
         resolvedDisplay.alpha = condition.alpha
       end
@@ -1577,11 +1673,15 @@ function TwAuras:ResolveConditionalState(aura, state)
     end
   end
   state.display = resolvedDisplay
+  if self:IsAuraDebugEnabled(aura, "conditions") then
+    self:DebugLog(aura, "conditions", tostring(matchedCount) .. " condition(s) matched; active=" .. tostring(state.active and true or false))
+  end
   return state
 end
 
 -- Display text is resolved late from runtime state so one region can show names, timers,
 -- resources, or stacks without knowing which trigger type produced the state.
+-- Dynamic text formatting is the final token expansion step before text hits a live region.
 function TwAuras:FormatDynamicDisplayText(template, aura, state, now)
   local text = template or ""
   local display = state.display or aura.display or {}
@@ -1642,6 +1742,7 @@ function TwAuras:FormatDynamicDisplayText(template, aura, state, now)
   return text
 end
 
+-- Source text prefers the first active combat-log-like trigger so multi-trigger auras stay readable.
 function TwAuras:GetPreferredSourceText(aura, state)
   local triggerStates = aura and aura.__triggerStates or nil
   local i
@@ -1666,11 +1767,13 @@ function TwAuras:GetPreferredSourceText(aura, state)
   return ""
 end
 
+-- Runtime keys isolate per-trigger timers inside a shared aura without collisions.
 function TwAuras:GetTriggerRuntimeKey(aura, trigger)
   local index = trigger and trigger.__index or 1
   return tostring(aura.id) .. ":" .. tostring(index)
 end
 
+-- Aura list order always follows the persistent auraStore order array.
 function TwAuras:GetAuraList()
   local store = self:GetAuraStore()
   local auras = {}
@@ -1692,6 +1795,7 @@ function TwAuras:GetPlayerClass()
   return class
 end
 
+-- Trigger summaries feed the aura list summary line and other human-readable descriptions.
 function TwAuras:SummarizeTrigger(trigger)
   local unit = trigger and trigger.unit or "player"
   local op = trigger and trigger.operator or ">="
@@ -1825,6 +1929,7 @@ function TwAuras:SummarizeTrigger(trigger)
   return trigger.type
 end
 
+-- Aura summaries compress display, trigger, and load intent into one short sentence for the editor.
 function TwAuras:GetAuraSummary(aura, maxLength)
   local relevant = {}
   local i
@@ -1872,6 +1977,32 @@ function TwAuras:GetAuraSummary(aura, maxLength)
     if aura.load.requireTarget then
       table.insert(loadParts, "target required")
     end
+    if self:LoadUsesZoneContext(aura.load) then
+      local locations = {}
+      if aura.load.allowWorld then
+        table.insert(locations, "world")
+      end
+      if aura.load.allowDungeon then
+        table.insert(locations, "dungeon")
+      end
+      if aura.load.allowRaid then
+        table.insert(locations, "raid")
+      end
+      if aura.load.allowPvp then
+        table.insert(locations, "battleground")
+      end
+      if aura.load.allowArena then
+        table.insert(locations, "arena")
+      end
+      if table.getn(locations) == 1 then
+        table.insert(loadParts, locations[1] .. " only")
+      elseif table.getn(locations) > 1 and table.getn(locations) < 5 then
+        table.insert(loadParts, "locations: " .. table.concat(locations, "/"))
+      end
+      if aura.load.zoneText and aura.load.zoneText ~= "" then
+        table.insert(loadParts, "zone contains " .. aura.load.zoneText)
+      end
+    end
   end
 
   if table.getn(loadParts) > 0 then
@@ -1882,10 +2013,12 @@ function TwAuras:GetAuraSummary(aura, maxLength)
 end
 
 -- Load conditions are intentionally simple for the first feature set.
+-- Load rules are checked before expensive trigger work whenever possible.
 function TwAuras:PassesLoad(cfg)
   if not cfg then
     return true
   end
+  local instanceType = self:GetCurrentInstanceType()
   if cfg.inCombat and not UnitAffectingCombat("player") then
     return false
   end
@@ -1895,10 +2028,101 @@ function TwAuras:PassesLoad(cfg)
   if cfg.requireTarget and not UnitExists("target") then
     return false
   end
+  if instanceType == "none" and cfg.allowWorld == false then
+    return false
+  end
+  if instanceType == "party" and cfg.allowDungeon == false then
+    return false
+  end
+  if instanceType == "raid" and cfg.allowRaid == false then
+    return false
+  end
+  if instanceType == "pvp" and cfg.allowPvp == false then
+    return false
+  end
+  if instanceType == "arena" and cfg.allowArena == false then
+    return false
+  end
+  if cfg.zoneText and cfg.zoneText ~= "" then
+    local info = self.GetZoneInfo and self:GetZoneInfo() or {
+      zoneName = (GetRealZoneText and GetRealZoneText()) or (GetZoneText and GetZoneText()) or "",
+      subZoneName = (GetSubZoneText and GetSubZoneText()) or "",
+    }
+    local wanted = SafeLower(cfg.zoneText)
+    if not string.find(SafeLower(info.zoneName), wanted, 1, true) and not string.find(SafeLower(info.subZoneName), wanted, 1, true) then
+      return false
+    end
+  end
   return true
 end
 
+-- Debug output is throttled per aura and subsystem so frequent refreshes stay readable.
+function TwAuras:DebugLog(aura, area, message)
+  local now = GetTime()
+  local id = aura and aura.id or "global"
+  local key
+  local entry
+  if not area or area == "" or not message or message == "" then
+    return
+  end
+  self.runtime.debugLog = self.runtime.debugLog or {}
+  key = tostring(id) .. ":" .. tostring(area)
+  entry = self.runtime.debugLog[key]
+  if entry and (now - (entry.lastAt or 0)) < 10 then
+    return
+  end
+  self.runtime.debugLog[key] = {
+    lastAt = now,
+    message = message,
+  }
+  self:Print("[" .. string.upper(area) .. "] " .. (aura and aura.name or "TwAuras") .. ": " .. message)
+end
+
+function TwAuras:IsAuraDebugEnabled(aura, area)
+  return aura and aura.debug and aura.debug[area] and true or false
+end
+
+function TwAuras:GetLoadFailureReason(cfg)
+  local instanceType = self:GetCurrentInstanceType()
+  if cfg.inCombat and not UnitAffectingCombat("player") then
+    return "waiting for combat"
+  end
+  if cfg.class and cfg.class ~= "" and cfg.class ~= self:GetPlayerClass() then
+    return "class mismatch"
+  end
+  if cfg.requireTarget and not UnitExists("target") then
+    return "target missing"
+  end
+  if instanceType == "none" and cfg.allowWorld == false then
+    return "world disabled"
+  end
+  if instanceType == "party" and cfg.allowDungeon == false then
+    return "dungeon disabled"
+  end
+  if instanceType == "raid" and cfg.allowRaid == false then
+    return "raid disabled"
+  end
+  if instanceType == "pvp" and cfg.allowPvp == false then
+    return "battleground disabled"
+  end
+  if instanceType == "arena" and cfg.allowArena == false then
+    return "arena disabled"
+  end
+  if cfg.zoneText and cfg.zoneText ~= "" then
+    local info = self.GetZoneInfo and self:GetZoneInfo() or {
+      zoneName = (GetRealZoneText and GetRealZoneText()) or (GetZoneText and GetZoneText()) or "",
+      subZoneName = (GetSubZoneText and GetSubZoneText()) or "",
+    }
+    local wanted = SafeLower(cfg.zoneText)
+    if not string.find(SafeLower(info.zoneName), wanted, 1, true) and not string.find(SafeLower(info.subZoneName), wanted, 1, true) then
+      return "zone text mismatch"
+    end
+  end
+  return "passed"
+end
+
 -- Event-key routing lets auras opt into only the WoW state changes they care about.
+-- Aura event keys tell the refresh router which auras care about which raw events.
 function TwAuras:GetAuraEventKeys(aura)
   -- Event keys may come from explicit user text or from the trigger definitions themselves.
   -- This keeps the default refresh path cheap while still giving advanced users an override.
@@ -1921,6 +2145,9 @@ function TwAuras:GetAuraEventKeys(aura)
     end
     if aura.load.requireTarget then
       self:AddEventKey(keys, "target")
+    end
+    if self:LoadUsesZoneContext(aura.load) then
+      self:AddEventKey(keys, "zone")
     end
   end
 
@@ -1951,6 +2178,7 @@ function TwAuras:AuraMatchesEvent(aura, eventName)
 end
 
 -- This is the main event-side optimization: only matching auras are reevaluated per event.
+-- Event routing keeps broad event registration from turning into full-aura refresh spam.
 function TwAuras:RefreshAurasForEvent(eventName)
   local auras = self:GetAuraList()
   local i
@@ -1962,6 +2190,7 @@ function TwAuras:RefreshAurasForEvent(eventName)
 end
 
 -- Runtime timers back estimated durations and combat-log based countdowns.
+-- Runtime timer records are created lazily so untimed auras do not accumulate timer tables.
 function TwAuras:GetAuraRuntime(id)
   if not self.runtime.timers[id] then
     self.runtime.timers[id] = {}
@@ -1969,6 +2198,7 @@ function TwAuras:GetAuraRuntime(id)
   return self.runtime.timers[id]
 end
 
+-- Aura timers provide a consistent timer source for estimated durations and combat-log states.
 function TwAuras:StartAuraTimer(id, duration, icon, label, source)
   local timer = self:GetAuraRuntime(id)
   local now = GetTime()
@@ -1996,6 +2226,7 @@ function TwAuras:StopAuraTimersForAura(aura)
 end
 
 -- Vanilla APIs do not expose aura names directly, so the tooltip becomes the source of truth.
+-- Tooltip extraction is the core Vanilla-compatible aura-name lookup fallback.
 function TwAuras:ExtractTooltipAuraName(setter, unit, index)
   if not GameTooltip or not setter then
     return nil
@@ -2008,6 +2239,7 @@ function TwAuras:ExtractTooltipAuraName(setter, unit, index)
   return name
 end
 
+-- Player aura extraction prefers the old GetPlayerBuff/SetPlayerBuff path when available.
 function TwAuras:ExtractPlayerBuffAuraName(index, filter)
   local buffIndex
   local left
@@ -2029,6 +2261,7 @@ end
 
 
 -- Region lifecycle helpers bridge saved aura configs and live frame instances.
+-- Region initialization creates one root region per saved aura and keeps them addressable by id.
 function TwAuras:InitializeRegions()
   self.regions = {}
   local auras = self:GetAuraList()
@@ -2039,6 +2272,7 @@ function TwAuras:InitializeRegions()
   end
 end
 
+-- A full refresh is used after edits, migrations, and broad state transitions.
 function TwAuras:RefreshAll()
   local auras = self:GetAuraList()
   local i
@@ -2068,8 +2302,19 @@ function TwAuras:RefreshAura(aura)
       aura.__unitStates = self:BuildPreviewUnitFrameStates(aura)
       aura.__state = aura.__unitStates[1] or self:BuildPreviewState(aura)
       self:ClearAuraAudioState(aura)
-      region:ApplyUnitStates(aura, aura.__unitStates)
+      local ok, err = pcall(region.ApplyUnitStates, region, aura, aura.__unitStates)
+      if not ok then
+        if self:IsAuraDebugEnabled(aura, "display") then
+          self:DebugLog(aura, "display", "unit frame preview apply error: " .. tostring(err))
+        end
+        region:Hide()
+        self:RefreshDebugObjectDisplays()
+        return
+      end
       region:Show()
+      if self:IsAuraDebugEnabled(aura, "display") then
+        self:DebugLog(aura, "display", "previewing " .. tostring(table.getn(aura.__unitStates or {})) .. " unit frame state(s)")
+      end
       self:RefreshDebugObjectDisplays()
       return
     end
@@ -2079,18 +2324,38 @@ function TwAuras:RefreshAura(aura)
       aura.__state = self:NormalizeState(aura, { active = false })
       region:SetInactive(aura)
       region:Hide()
+      if self:IsAuraDebugEnabled(aura, "load") then
+        self:DebugLog(aura, "load", self:GetLoadFailureReason(aura.load))
+      end
       self:RefreshDebugObjectDisplays()
       return
+    end
+    if self:IsAuraDebugEnabled(aura, "load") then
+      self:DebugLog(aura, "load", "passed")
     end
 
     aura.__unitStates, aura.__state = self:BuildUnitFrameStates(aura)
     self:HandleAuraSoundState(aura, aura.__state)
     if table.getn(aura.__unitStates or {}) > 0 then
-      region:ApplyUnitStates(aura, aura.__unitStates)
+      local ok, err = pcall(region.ApplyUnitStates, region, aura, aura.__unitStates)
+      if not ok then
+        if self:IsAuraDebugEnabled(aura, "display") then
+          self:DebugLog(aura, "display", "unit frame apply error: " .. tostring(err))
+        end
+        region:Hide()
+        self:RefreshDebugObjectDisplays()
+        return
+      end
       region:Show()
+      if self:IsAuraDebugEnabled(aura, "display") then
+        self:DebugLog(aura, "display", "showing " .. tostring(table.getn(aura.__unitStates or {})) .. " unit frame state(s)")
+      end
     else
       region:SetInactive(aura)
       region:Hide()
+      if self:IsAuraDebugEnabled(aura, "display") then
+        self:DebugLog(aura, "display", "no active unit frame states")
+      end
     end
     self:RefreshDebugObjectDisplays()
     return
@@ -2099,8 +2364,19 @@ function TwAuras:RefreshAura(aura)
   if self:IsAuraPreviewing(aura.id) then
     aura.__state = self:BuildPreviewState(aura)
     self:ClearAuraAudioState(aura)
-    region:ApplyState(aura, aura.__state)
+    local ok, err = pcall(region.ApplyState, region, aura, aura.__state)
+    if not ok then
+      if self:IsAuraDebugEnabled(aura, "display") then
+        self:DebugLog(aura, "display", "preview apply error: " .. tostring(err))
+      end
+      region:Hide()
+      self:RefreshDebugObjectDisplays()
+      return
+    end
     region:Show()
+    if self:IsAuraDebugEnabled(aura, "display") then
+      self:DebugLog(aura, "display", "preview state active")
+    end
     self:RefreshDebugObjectDisplays()
     return
   end
@@ -2108,8 +2384,14 @@ function TwAuras:RefreshAura(aura)
   if not aura.enabled or not self:PassesLoad(aura.load) then
     aura.__state = self:NormalizeState(aura, { active = false })
     region:Hide()
+    if self:IsAuraDebugEnabled(aura, "load") then
+      self:DebugLog(aura, "load", self:GetLoadFailureReason(aura.load))
+    end
     self:RefreshDebugObjectDisplays()
     return
+  end
+  if self:IsAuraDebugEnabled(aura, "load") then
+    self:DebugLog(aura, "load", "passed")
   end
 
   local state = self:EvaluateTrigger(aura)
@@ -2117,20 +2399,38 @@ function TwAuras:RefreshAura(aura)
   self:HandleAuraSoundState(aura, aura.__state)
 
   if aura.__state and aura.__state.active then
-    region:ApplyState(aura, aura.__state)
+    local ok, err = pcall(region.ApplyState, region, aura, aura.__state)
+    if not ok then
+      if self:IsAuraDebugEnabled(aura, "display") then
+        self:DebugLog(aura, "display", "apply error: " .. tostring(err))
+      end
+      region:Hide()
+      self:RefreshDebugObjectDisplays()
+      return
+    end
     region:Show()
+    if self:IsAuraDebugEnabled(aura, "display") then
+      self:DebugLog(aura, "display", "showing active " .. tostring(aura.regionType or "icon") .. " region")
+    end
   else
     if aura.display.desaturateInactive and region.SetInactive then
       region:SetInactive(aura)
       region:Show()
+      if self:IsAuraDebugEnabled(aura, "display") then
+        self:DebugLog(aura, "display", "inactive display shown with desaturation")
+      end
     else
       region:Hide()
+      if self:IsAuraDebugEnabled(aura, "display") then
+        self:DebugLog(aura, "display", "hidden because state is inactive")
+      end
     end
   end
   self:RefreshDebugObjectDisplays()
 end
 
 -- Timed refresh helpers keep countdowns smooth without reevaluating every aura each frame.
+-- Dynamic text updates are lightweight compared to full trigger evaluation, so they run separately.
 function TwAuras:RefreshDynamicTexts(now)
   local auras = self:GetAuraList()
   local i
@@ -2143,6 +2443,7 @@ function TwAuras:RefreshDynamicTexts(now)
   end
 end
 
+-- Timed aura refreshes keep countdown displays responsive even when no new event fires.
 function TwAuras:RefreshTimedAuras()
   local auras = self:GetAuraList()
   local i
@@ -2154,6 +2455,7 @@ function TwAuras:RefreshTimedAuras()
   end
 end
 
+-- Audio state is kept per aura so start/loop/stop sounds only fire on state transitions.
 function TwAuras:GetAuraAudioState(aura)
   if not aura or not aura.id then
     return {}
@@ -2168,6 +2470,7 @@ function TwAuras:GetAuraAudioState(aura)
   return self.runtime.auraAudio[aura.id]
 end
 
+-- Preview state is editor-only and must never leak into saved runtime behavior or audio triggers.
 function TwAuras:IsAuraPreviewing(auraId)
   return self.runtime and self.runtime.previewAuras and self.runtime.previewAuras[auraId] and true or false
 end
@@ -2185,6 +2488,7 @@ function TwAuras:ClearAuraPreviews()
   self.runtime.previewAuras = {}
 end
 
+-- Preview state synthesizes a visible example so users can place and style regions safely.
 function TwAuras:BuildPreviewState(aura)
   local previewUnit = aura and aura.trigger and aura.trigger.unit or "player"
   local state = self:NormalizeState(aura, {
@@ -2203,6 +2507,7 @@ function TwAuras:BuildPreviewState(aura)
   return self:ResolveConditionalState(aura, state)
 end
 
+-- Energy tick tracking predicts the next rogue/druid tick from observed resource gains.
 function TwAuras:UpdateEnergyTickTracking()
   local now = GetTime()
   local info = self.runtime.energyTick or {}
@@ -2235,6 +2540,7 @@ function TwAuras:GetEnergyTickInfo()
   }
 end
 
+-- The five-second-rule tracker is a lightweight mana-spend timer for healer/caster workflows.
 function TwAuras:UpdateManaFiveSecondRuleTracking()
   local now = GetTime()
   local info = self.runtime.manaFiveSecondRule or {}
@@ -2265,6 +2571,7 @@ function TwAuras:ClearAuraAudioState(aura)
   self.runtime.auraAudio[aura.id] = nil
 end
 
+-- Sound values can be ids or file paths, so playback tries both WoW-compatible forms.
 function TwAuras:PlayConfiguredSound(soundValue)
   local value = soundValue or ""
   if value == "" then
@@ -2281,6 +2588,7 @@ function TwAuras:PlayConfiguredSound(soundValue)
   return false
 end
 
+-- Aura sound handling converts active/inactive transitions into one-shot and looping audio behavior.
 function TwAuras:HandleAuraSoundState(aura, state)
   local soundActions = aura and aura.soundActions or nil
   local audioState
@@ -2305,6 +2613,7 @@ function TwAuras:HandleAuraSoundState(aura, state)
   end
 end
 
+-- Loop sounds are polled from OnUpdate because they are time-based rather than event-based.
 function TwAuras:UpdateAuraLoopSounds(now)
   local auras = self:GetAuraList()
   local i
@@ -2326,6 +2635,7 @@ function TwAuras:UpdateAuraLoopSounds(now)
 end
 
 -- Unlocking only affects dragging and visual move handles.
+-- Unlocking is a global editor convenience that toggles drag handles on every region.
 function TwAuras:SetUnlocked(flag)
   self.db.unlocked = flag and true or false
   local auras = self:GetAuraList()
@@ -2341,6 +2651,7 @@ end
 
 
 -- Recent lines help players author combat-log triggers without guessing strings.
+-- The recent combat-log dump is a live debugging aid for building string-match triggers.
 function TwAuras:DebugRecentCombatLog()
   local logs = self.runtime.recentCombatLog
   if table.getn(logs) == 0 then
@@ -2354,6 +2665,7 @@ function TwAuras:DebugRecentCombatLog()
   end
 end
 
+-- Player cast tracking snapshots cast/channel state for triggers and combo-point timing.
 function TwAuras:UpdatePlayerCast(eventName, spellName)
   -- Vanilla cast events are sparse, so we cache a tiny player-cast snapshot here that the
   -- generic casting trigger can query later.
@@ -2377,6 +2689,7 @@ function TwAuras:UpdatePlayerCast(eventName, spellName)
 end
 
 -- Event routing stays centralized so trigger-specific logic lives elsewhere.
+-- OnEvent is the central bridge between raw WoW events and TwAuras' higher-level refresh systems.
 function TwAuras:OnEvent(eventName, eventUnit)
   -- Event flow stays centralized here so trigger files remain declarative.
   -- Shared runtime snapshots are updated first, then only relevant auras are refreshed.

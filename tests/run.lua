@@ -1,9 +1,11 @@
--- TwAuras file version: 0.1.34
+-- TwAuras file version: 0.1.38
+-- The harness is intentionally tiny: load the addon under a stubbed WoW API and assert behavior.
 local function dirname(path)
   local normalized = string.gsub(path, "\\", "/")
   return string.match(normalized, "^(.*)/[^/]+$") or "."
 end
 
+-- Path joining keeps the test runner independent of the current working directory.
 local function join(a, b)
   if string.sub(a, -1) == "/" then
     return a .. b
@@ -25,22 +27,26 @@ dofile(join(addonDir, "Config.lua"))
 
 local tests = {}
 
+-- Assertions stay minimal on purpose so failures read more like normal Lua errors.
 local function assert_equal(actual, expected, message)
   if actual ~= expected then
     error((message or "values differ") .. " expected=" .. tostring(expected) .. " actual=" .. tostring(actual), 2)
   end
 end
 
+-- Truthiness checks are split out so tests remain readable without a larger framework.
 local function assert_true(value, message)
   if not value then
     error(message or "expected true", 2)
   end
 end
 
+-- Tests are registered up front, then executed in order at the bottom of the file.
 local function add_test(name, fn)
   table.insert(tests, { name = name, fn = fn })
 end
 
+-- Each test starts from a clean addon runtime so stateful systems do not bleed between cases.
 local function fresh_runtime()
   -- Tests reset runtime state between cases so timers, cast snapshots, and tracked debuffs do
   -- not leak across assertions.
@@ -55,6 +61,7 @@ local function fresh_runtime()
   TwAuras.runtime.lastPlayerComboPoints = 0
   TwAuras.runtime.playerCast = {}
   TwAuras.runtime.auraAudio = {}
+  TwAuras.runtime.debugLog = {}
   TwAuras.runtime.previewAuras = {}
   TwAuras.runtime.previewChoices = {}
   TwAuras.runtime.energyTick = {}
@@ -702,6 +709,74 @@ add_test("duplicate aura record gets a new id and numbered collision-safe name",
   assert_equal(duplicate.id, 3, "duplicate should get the next available id")
   assert_equal(duplicate.key, "aura_3", "duplicate should get a fresh storage key")
   assert_equal(duplicate.name, "Rip2", "duplicate should pick the next numbered name")
+end)
+
+add_test("create aura template picks a collision-safe new aura name", function()
+  fresh_runtime()
+  TwAuras.db = {
+    nextId = 3,
+    auraStore = {
+      version = 1,
+      order = {1, 2},
+      items = {
+        ["1"] = { id = 1, key = "aura_1", schemaVersion = 1, name = "New Aura", triggers = {}, display = {}, load = {}, position = {} },
+        ["2"] = { id = 2, key = "aura_2", schemaVersion = 1, name = "New Aura1", triggers = {}, display = {}, load = {}, position = {} },
+      },
+    },
+  }
+
+  local aura = TwAuras:CreateAuraTemplate()
+  assert_equal(aura.name, "New Aura2", "new aura creation should avoid existing display-name collisions")
+end)
+
+add_test("unique aura naming ignores the aura currently being renamed", function()
+  fresh_runtime()
+  TwAuras.db = {
+    nextId = 3,
+    auraStore = {
+      version = 1,
+      order = {1, 2},
+      items = {
+        ["1"] = {
+          id = 1,
+          key = "aura_1",
+          schemaVersion = 1,
+          name = "Rip",
+          enabled = true,
+          regionType = "icon",
+          triggerMode = "all",
+          triggers = {
+            { type = "always" },
+          },
+          conditions = {},
+          display = {},
+          load = {},
+          position = {},
+          soundActions = {},
+        },
+        ["2"] = {
+          id = 2,
+          key = "aura_2",
+          schemaVersion = 1,
+          name = "Moonfire",
+          enabled = true,
+          regionType = "icon",
+          triggerMode = "all",
+          triggers = {
+            { type = "always" },
+          },
+          conditions = {},
+          display = {},
+          load = {},
+          position = {},
+          soundActions = {},
+        },
+      },
+    },
+  }
+
+  assert_equal(TwAuras:GetUniqueAuraName("Rip", 2), "Rip1", "renaming to an existing name should get a numbered suffix")
+  assert_equal(TwAuras:GetUniqueAuraName("Rip1", 2), "Rip1", "the current aura should not collide with its own existing unique name")
 end)
 
 add_test("object summary counts saved and active runtime objects", function()
@@ -1449,6 +1524,11 @@ add_test("aura summary describes triggers and load concisely", function()
       class = "DRUID",
       inCombat = true,
       requireTarget = true,
+      allowWorld = true,
+      allowDungeon = true,
+      allowRaid = true,
+      allowPvp = true,
+      allowArena = true,
     },
   }
 
@@ -1473,12 +1553,85 @@ add_test("aura summary truncates with ellipsis at max length", function()
       class = "DRUID",
       inCombat = true,
       requireTarget = true,
+      allowWorld = true,
+      allowDungeon = true,
+      allowRaid = true,
+      allowPvp = true,
+      allowArena = true,
     },
   }
 
   local summary = TwAuras:GetAuraSummary(aura, 252)
   assert_true(string.len(summary) <= 252, "summary should respect max length")
   assert_true(string.sub(summary, -3) == "...", "truncated summary should end with ellipsis")
+end)
+
+add_test("load allows world by default and blocks world when disabled", function()
+  stub.set_instance(false, "none")
+  assert_true(TwAuras:PassesLoad({
+    allowWorld = true,
+    allowDungeon = true,
+    allowRaid = true,
+    allowPvp = true,
+    allowArena = true,
+  }), "world should pass when enabled")
+  assert_true(not TwAuras:PassesLoad({
+    allowWorld = false,
+    allowDungeon = true,
+    allowRaid = true,
+    allowPvp = true,
+    allowArena = true,
+  }), "world should fail when the no-instance option is disabled")
+end)
+
+add_test("load instance checkboxes respect party raid pvp and arena types", function()
+  stub.set_instance(true, "party")
+  assert_true(TwAuras:PassesLoad({ allowWorld = true, allowDungeon = true, allowRaid = false, allowPvp = false, allowArena = false }), "party instances should use dungeon checkbox")
+  assert_true(not TwAuras:PassesLoad({ allowWorld = true, allowDungeon = false, allowRaid = true, allowPvp = true, allowArena = true }), "party instances should fail when dungeon is disabled")
+
+  stub.set_instance(true, "raid")
+  assert_true(TwAuras:PassesLoad({ allowWorld = false, allowDungeon = false, allowRaid = true, allowPvp = false, allowArena = false }), "raid instances should use raid checkbox")
+  assert_true(not TwAuras:PassesLoad({ allowWorld = true, allowDungeon = true, allowRaid = false, allowPvp = true, allowArena = true }), "raid instances should fail when raid is disabled")
+
+  stub.set_instance(true, "pvp")
+  assert_true(TwAuras:PassesLoad({ allowWorld = false, allowDungeon = false, allowRaid = false, allowPvp = true, allowArena = false }), "pvp instances should use battleground checkbox")
+  assert_true(not TwAuras:PassesLoad({ allowWorld = true, allowDungeon = true, allowRaid = true, allowPvp = false, allowArena = true }), "pvp instances should fail when battlegrounds are disabled")
+
+  stub.set_instance(true, "arena")
+  assert_true(TwAuras:PassesLoad({ allowWorld = false, allowDungeon = false, allowRaid = false, allowPvp = false, allowArena = true }), "arena instances should use arena checkbox")
+  assert_true(not TwAuras:PassesLoad({ allowWorld = true, allowDungeon = true, allowRaid = true, allowPvp = true, allowArena = false }), "arena instances should fail when arenas are disabled")
+end)
+
+add_test("load zone text matches zone or sub zone text", function()
+  stub.set_instance(false, "none")
+  stub.set_zone("Blackrock Mountain", "Blackrock Depths")
+  assert_true(TwAuras:PassesLoad({ zoneText = "blackrock" }), "zone text should match the main zone")
+  assert_true(TwAuras:PassesLoad({ zoneText = "depths" }), "zone text should match the sub zone")
+  assert_true(not TwAuras:PassesLoad({ zoneText = "stormwind" }), "zone text should fail when neither zone string matches")
+end)
+
+add_test("load zone context adds zone event inference and summary text", function()
+  local aura = {
+    id = 305,
+    regionType = "icon",
+    triggers = {
+      { type = "always" },
+    },
+    load = {
+      allowWorld = true,
+      allowDungeon = true,
+      allowRaid = false,
+      allowPvp = false,
+      allowArena = false,
+      zoneText = "strath",
+    },
+  }
+
+  local keys = TwAuras:GetAuraEventKeys(aura)
+  local summary = TwAuras:GetAuraSummary(aura, 252)
+  assert_true(keys.zone and true or false, "location-based load rules should add zone refresh inference")
+  assert_true(string.find(summary, "locations: world/dungeon", 1, true) ~= nil, "summary should describe restricted instance locations")
+  assert_true(string.find(summary, "zone contains strath", 1, true) ~= nil, "summary should include zone text filters")
 end)
 
 add_test("source token prefers first active combat log style trigger source", function()
@@ -1937,6 +2090,358 @@ add_test("unit frame states evaluate partyunit buffs per member", function()
   assert_true(aggregate.active, "aggregate state should be active when at least one frame unit matches")
 end)
 
+add_test("unit frame top left icons expand left to right without overlap", function()
+  fresh_runtime()
+  _G["PartyMemberFrame1"] = CreateFrame("Frame")
+
+  local aura1 = {
+    id = 101,
+    key = "aura_101",
+    schemaVersion = 1,
+    name = "Left A",
+    enabled = true,
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Rejuvenation" },
+    },
+    conditions = {},
+    display = {
+      frameScope = "party",
+      overlayStyle = "icon",
+      frameAnchor = "TOPLEFT",
+      frameYOffset = 0,
+      width = 16,
+      height = 16,
+      alpha = 1,
+      iconPath = "",
+      color = {1, 1, 1, 1},
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+    __unitStates = {
+      { active = true, unit = "party1", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+    },
+  }
+  local aura2 = {
+    id = 102,
+    key = "aura_102",
+    schemaVersion = 1,
+    name = "Left B",
+    enabled = true,
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Rejuvenation" },
+    },
+    conditions = {},
+    display = {
+      frameScope = "party",
+      overlayStyle = "icon",
+      frameAnchor = "TOPLEFT",
+      frameYOffset = 0,
+      width = 16,
+      height = 16,
+      alpha = 1,
+      iconPath = "",
+      color = {1, 1, 1, 1},
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+    __unitStates = {
+      { active = true, unit = "party1", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+    },
+  }
+
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {101, 102},
+      items = {
+        ["101"] = aura1,
+        ["102"] = aura2,
+      },
+    },
+  }
+
+  local region1 = TwAuras:CreateRegion(aura1)
+  local region2 = TwAuras:CreateRegion(aura2)
+
+  region1:ApplyUnitStates(aura1, aura1.__unitStates)
+  region2:ApplyUnitStates(aura2, aura2.__unitStates)
+
+  local _, _, _, x1 = region1.overlays[1]:GetPoint()
+  local _, _, _, x2 = region2.overlays[1]:GetPoint()
+  assert_equal(x1, 2, "first TOPLEFT icon should anchor with a small inset")
+  assert_equal(x2, 20, "second TOPLEFT icon should expand to the right")
+end)
+
+add_test("unit frame top icons expand from center without overlap", function()
+  fresh_runtime()
+  _G["PartyMemberFrame1"] = CreateFrame("Frame")
+
+  local aura1 = {
+    id = 201,
+    key = "aura_201",
+    schemaVersion = 1,
+    name = "Top A",
+    enabled = true,
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Rejuvenation" },
+    },
+    conditions = {},
+    display = {
+      frameScope = "party",
+      overlayStyle = "icon",
+      frameAnchor = "TOP",
+      frameYOffset = 0,
+      width = 16,
+      height = 16,
+      alpha = 1,
+      iconPath = "",
+      color = {1, 1, 1, 1},
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+    __unitStates = {
+      { active = true, unit = "party1", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+    },
+  }
+  local aura2 = {
+    id = 202,
+    key = "aura_202",
+    schemaVersion = 1,
+    name = "Top B",
+    enabled = true,
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Rejuvenation" },
+    },
+    conditions = {},
+    display = {
+      frameScope = "party",
+      overlayStyle = "icon",
+      frameAnchor = "TOP",
+      frameYOffset = 0,
+      width = 16,
+      height = 16,
+      alpha = 1,
+      iconPath = "",
+      color = {1, 1, 1, 1},
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+    __unitStates = {
+      { active = true, unit = "party1", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+    },
+  }
+
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {201, 202},
+      items = {
+        ["201"] = aura1,
+        ["202"] = aura2,
+      },
+    },
+  }
+
+  local region1 = TwAuras:CreateRegion(aura1)
+  local region2 = TwAuras:CreateRegion(aura2)
+
+  region1:ApplyUnitStates(aura1, aura1.__unitStates)
+  region2:ApplyUnitStates(aura2, aura2.__unitStates)
+
+  local _, _, _, x1 = region1.overlays[1]:GetPoint()
+  local _, _, _, x2 = region2.overlays[1]:GetPoint()
+  assert_equal(x1, -9, "first TOP icon should shift left of center")
+  assert_equal(x2, 9, "second TOP icon should shift right of center")
+end)
+
+add_test("unit frame top right icons expand right to left without overlap", function()
+  fresh_runtime()
+  _G["PartyMemberFrame1"] = CreateFrame("Frame")
+
+  local aura1 = {
+    id = 301,
+    key = "aura_301",
+    schemaVersion = 1,
+    name = "Right A",
+    enabled = true,
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Rejuvenation" },
+    },
+    conditions = {},
+    display = {
+      frameScope = "party",
+      overlayStyle = "icon",
+      frameAnchor = "TOPRIGHT",
+      frameYOffset = 0,
+      width = 16,
+      height = 16,
+      alpha = 1,
+      iconPath = "",
+      color = {1, 1, 1, 1},
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+    __unitStates = {
+      { active = true, unit = "party1", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+    },
+  }
+  local aura2 = {
+    id = 302,
+    key = "aura_302",
+    schemaVersion = 1,
+    name = "Right B",
+    enabled = true,
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Rejuvenation" },
+    },
+    conditions = {},
+    display = {
+      frameScope = "party",
+      overlayStyle = "icon",
+      frameAnchor = "TOPRIGHT",
+      frameYOffset = 0,
+      width = 16,
+      height = 16,
+      alpha = 1,
+      iconPath = "",
+      color = {1, 1, 1, 1},
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+    __unitStates = {
+      { active = true, unit = "party1", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+    },
+  }
+
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {301, 302},
+      items = {
+        ["301"] = aura1,
+        ["302"] = aura2,
+      },
+    },
+  }
+
+  local region1 = TwAuras:CreateRegion(aura1)
+  local region2 = TwAuras:CreateRegion(aura2)
+
+  region1:ApplyUnitStates(aura1, aura1.__unitStates)
+  region2:ApplyUnitStates(aura2, aura2.__unitStates)
+
+  local _, _, _, x1 = region1.overlays[1]:GetPoint()
+  local _, _, _, x2 = region2.overlays[1]:GetPoint()
+  assert_equal(x1, -2, "first TOPRIGHT icon should anchor with a small inset")
+  assert_equal(x2, -20, "second TOPRIGHT icon should expand to the left")
+end)
+
+add_test("raid unit frame icons use the same non-overlap layout rules", function()
+  fresh_runtime()
+  _G["RaidGroupButton1"] = CreateFrame("Frame")
+
+  local aura1 = {
+    id = 401,
+    key = "aura_401",
+    schemaVersion = 1,
+    name = "Raid Left A",
+    enabled = true,
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Renew" },
+    },
+    conditions = {},
+    display = {
+      frameScope = "raid",
+      overlayStyle = "icon",
+      frameAnchor = "TOPLEFT",
+      frameYOffset = 0,
+      width = 16,
+      height = 16,
+      alpha = 1,
+      iconPath = "",
+      color = {1, 1, 1, 1},
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+    __unitStates = {
+      { active = true, unit = "raid1", icon = "Interface\\Icons\\Spell_Holy_Renew" },
+    },
+  }
+  local aura2 = {
+    id = 402,
+    key = "aura_402",
+    schemaVersion = 1,
+    name = "Raid Left B",
+    enabled = true,
+    regionType = "unitframes",
+    triggerMode = "all",
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Renew" },
+    },
+    conditions = {},
+    display = {
+      frameScope = "raid",
+      overlayStyle = "icon",
+      frameAnchor = "TOPLEFT",
+      frameYOffset = 0,
+      width = 16,
+      height = 16,
+      alpha = 1,
+      iconPath = "",
+      color = {1, 1, 1, 1},
+    },
+    load = {},
+    position = {},
+    soundActions = {},
+    __unitStates = {
+      { active = true, unit = "raid1", icon = "Interface\\Icons\\Spell_Holy_Renew" },
+    },
+  }
+
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {401, 402},
+      items = {
+        ["401"] = aura1,
+        ["402"] = aura2,
+      },
+    },
+  }
+
+  local region1 = TwAuras:CreateRegion(aura1)
+  local region2 = TwAuras:CreateRegion(aura2)
+
+  region1:ApplyUnitStates(aura1, aura1.__unitStates)
+  region2:ApplyUnitStates(aura2, aura2.__unitStates)
+
+  local _, _, _, x1 = region1.overlays[1]:GetPoint()
+  local _, _, _, x2 = region2.overlays[1]:GetPoint()
+  assert_equal(x1, 2, "first raid TOPLEFT icon should anchor with a small inset")
+  assert_equal(x2, 20, "second raid TOPLEFT icon should expand to the right")
+end)
+
 add_test("energy tick trigger tracks the next predicted tick", function()
   fresh_runtime()
   stub.set_time(100)
@@ -2158,6 +2663,45 @@ add_test("preview state forces an aura region visible for layout testing", funct
   assert_true(shown, "previewed aura should be shown even if disabled")
   assert_true(not hidden, "previewed aura should not be hidden")
   assert_true(appliedState and appliedState.active, "previewed aura should apply an active preview state")
+end)
+
+add_test("debug log is rate limited per aura and area", function()
+  fresh_runtime()
+  stub.set_time(10)
+  local aura = { id = 900, name = "Debug Aura" }
+  TwAuras:DebugLog(aura, "trigger", "first message")
+  TwAuras:DebugLog(aura, "trigger", "first message")
+  assert_equal(table.getn(stub.get_messages()), 1, "duplicate debug output inside the cooldown should be suppressed")
+
+  stub.advance_time(5)
+  TwAuras:DebugLog(aura, "trigger", "second message")
+  assert_equal(table.getn(stub.get_messages()), 1, "different messages in the same area should still be rate limited")
+
+  stub.advance_time(6)
+  TwAuras:DebugLog(aura, "trigger", "second message")
+  assert_equal(table.getn(stub.get_messages()), 2, "debug output should resume after ten seconds")
+end)
+
+add_test("trigger debug reports handler errors once and returns inactive state", function()
+  fresh_runtime()
+  stub.set_time(20)
+  TwAuras:RegisterTriggerType("explode_test", {
+    displayName = "Explode Test",
+    handler = function()
+      error("boom")
+    end,
+    fields = {},
+  })
+
+  local aura = {
+    id = 901,
+    name = "Exploder",
+    debug = { trigger = true },
+  }
+  local state = TwAuras:EvaluateSingleTrigger(aura, { type = "explode_test" })
+  local messages = stub.get_messages()
+  assert_true(not state.active, "failing trigger handlers should resolve inactive")
+  assert_true(string.find(messages[1] or "", "boom", 1, true) ~= nil, "trigger debug should surface handler errors")
 end)
 
 local passed = 0

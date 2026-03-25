@@ -1,5 +1,6 @@
--- TwAuras file version: 0.1.39
+-- TwAuras file version: 0.1.42
 -- Config.lua owns editor-only concerns: aura CRUD, dynamic trigger lists, and descriptor-driven widgets.
+-- Lowercasing editor strings in one place keeps select and free-text comparisons consistent.
 local function SafeLower(value)
   if not value then
     return ""
@@ -7,6 +8,7 @@ local function SafeLower(value)
   return string.lower(value)
 end
 
+-- The config reuses the same hue math as the region runtime so previews match in-game rendering.
 local function HueToRGB(hue)
   local normalized = (tonumber(hue) or 0) / 60
   local chroma = 1
@@ -25,6 +27,7 @@ local function HueToRGB(hue)
   return chroma, 0, x
 end
 
+-- Small widget factories keep the large config builder readable and visually consistent.
 local function MakeLabel(parent, text, x, y)
   local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   fs:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -33,6 +36,7 @@ local function MakeLabel(parent, text, x, y)
   return fs
 end
 
+-- Edit boxes stay non-autofocused so opening the config never steals movement keys unexpectedly.
 local function MakeEditBox(parent, width, height, x, y)
   local eb = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
   eb:SetAutoFocus(false)
@@ -42,6 +46,7 @@ local function MakeEditBox(parent, width, height, x, y)
   return eb
 end
 
+-- Buttons all route through one helper so the config layout can be rebuilt with less repetition.
 local function MakeButton(parent, text, width, height, x, y, onClick)
   local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
   button:SetWidth(width)
@@ -52,6 +57,7 @@ local function MakeButton(parent, text, width, height, x, y, onClick)
   return button
 end
 
+-- Generic hover help is used for token reminders, field explanations, and other compact hints.
 local function AttachHoverTooltip(widget, tooltipText)
   if not widget or not tooltipText or tooltipText == "" then
     return
@@ -66,6 +72,7 @@ local function AttachHoverTooltip(widget, tooltipText)
   end)
 end
 
+-- The object summary tooltip shares the runtime breakdown instead of duplicating its own counts.
 local function AttachObjectSummaryTooltip(widget)
   if not widget then
     return
@@ -85,6 +92,7 @@ local function AttachObjectSummaryTooltip(widget)
   end)
 end
 
+-- Select widgets accept either raw strings or { value, label } tables and normalize both shapes.
 local function NormalizeSelectOptions(options)
   local normalized = {}
   local i
@@ -105,6 +113,7 @@ local function NormalizeSelectOptions(options)
   return normalized
 end
 
+-- Looking up the selected option centrally keeps button labels and stored values in sync.
 local function FindSelectOption(options, value)
   local normalized = NormalizeSelectOptions(options)
   local i
@@ -116,6 +125,7 @@ local function FindSelectOption(options, value)
   return nil
 end
 
+-- TwAuras uses a lightweight custom select menu instead of Blizzard dropdowns for simpler control.
 local function MakeSelect(parent, width, height, x, y, options, onChanged)
   local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
   button:SetWidth(width)
@@ -131,6 +141,7 @@ local function MakeSelect(parent, width, height, x, y, options, onChanged)
   return button
 end
 
+-- Sliders are thin wrappers around the stock template so labels and ranges are configured together.
 local function MakeSlider(parent, name, minVal, maxVal, step, x, y, width)
   local slider = CreateFrame("Slider", name, parent, "OptionsSliderTemplate")
   slider:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -142,6 +153,7 @@ local function MakeSlider(parent, name, minVal, maxVal, step, x, y, width)
   return slider
 end
 
+-- Checkboxes use Blizzard templates but are wrapped here to keep the frame builder compact.
 local function MakeCheck(parent, globalName, text, x, y)
   local check = CreateFrame("CheckButton", globalName, parent, "UICheckButtonTemplate")
   check:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -149,6 +161,7 @@ local function MakeCheck(parent, globalName, text, x, y)
   return check
 end
 
+-- Color swatches provide a persistent preview surface for RGBA-style config fields.
 local function MakeSwatch(parent, x, y)
   local swatch = CreateFrame("Frame", nil, parent)
   swatch:SetWidth(18)
@@ -166,6 +179,7 @@ local function MakeSwatch(parent, x, y)
   return swatch
 end
 
+-- Human-readable lists in the UI use this helper so descriptor summaries stay short.
 local function JoinKeys(keys)
   return table.concat(keys or {}, ", ")
 end
@@ -237,6 +251,7 @@ local SOUND_PICKER_SOUNDS = TwAurasSoundList or {
   "Sound\\Interface\\MapPing.wav",
 }
 
+-- Selection helpers centralize which aura the editor is currently mutating.
 function TwAuras:GetAuraById(id)
   local store = self:GetAuraStore()
   local auras = self:GetAuraList()
@@ -295,7 +310,7 @@ function TwAuras:CreateAuraTemplate()
     id = id,
     key = self:BuildAuraRecordKey(id),
     schemaVersion = 1,
-    name = "New Aura " .. id,
+    name = self:GetUniqueAuraName("New Aura"),
     enabled = true,
     regionType = "icon",
     triggerMode = "all",
@@ -343,8 +358,15 @@ function TwAuras:CreateAuraTemplate()
       inCombat = false,
       class = nil,
       requireTarget = false,
+      allowWorld = true,
+      allowDungeon = true,
+      allowRaid = true,
+      allowPvp = true,
+      allowArena = true,
+      zoneText = "",
       updateEvents = "",
     },
+    debug = self:CreateDefaultDebugOptions(),
     position = {
       point = "CENTER",
       relativePoint = "CENTER",
@@ -357,6 +379,7 @@ function TwAuras:CreateAuraTemplate()
   return aura
 end
 
+-- New auras start from the normalized template, then are inserted into the persistent aura store.
 function TwAuras:AddAura()
   local aura = self:CreateAuraTemplate()
   self:InsertAuraRecord(aura)
@@ -368,6 +391,7 @@ function TwAuras:AddAura()
   self:RefreshConfigUI()
 end
 
+-- Duplication is editor-driven glue around the core record-cloning helper.
 function TwAuras:DuplicateAura(auraId)
   local aura = auraId and self:GetAuraById(auraId) or self:GetSelectedAura()
   local duplicate
@@ -389,6 +413,7 @@ function TwAuras:DuplicateAura(auraId)
   self:RefreshConfigUI()
 end
 
+-- The row context menu keeps destructive actions out of the always-visible row buttons.
 function TwAuras:OpenAuraRowMenu(row)
   if not self.configFrame or not row or not row.__auraId then
     return
@@ -427,6 +452,7 @@ function TwAuras:OpenAuraRowMenu(row)
   menu:Show()
 end
 
+-- Wizard presets create practical starter auras, then drop the user into the normal editor flow.
 function TwAuras:AddWizardAura(style)
   local aura = self:CreateAuraTemplate()
   local trigger
@@ -471,6 +497,7 @@ function TwAuras:AddWizardAura(style)
   self:RefreshConfigUI()
 end
 
+-- Delete removes the selected aura from storage, regions, and preview state in one place.
 function TwAuras:DeleteSelectedAura()
   -- Removing an aura also tears down its live region and runtime timers so no orphaned state
   -- lingers after deletion.
@@ -494,6 +521,7 @@ function TwAuras:DeleteSelectedAura()
   self:RefreshConfigUI()
 end
 
+-- Region rebuilds are used after display-type changes so stale frame types never linger.
 function TwAuras:RebuildSelectedRegion()
   local aura = self:GetSelectedAura()
   if not aura then
@@ -511,6 +539,7 @@ function TwAuras:RebuildSelectedRegion()
   self:RefreshAura(aura)
 end
 
+-- Descriptor widgets are the bridge between generic field metadata and actual editor controls.
 function TwAuras:GetDescriptorWidgetValue(widget)
   if not widget or not widget.field then
     return nil
@@ -571,6 +600,7 @@ function TwAuras:SetDescriptorWidgetValue(widget, value)
   end
 end
 
+-- Descriptor field groups let trigger and region editors share one metadata-driven rendering path.
 function TwAuras:BuildDescriptorFieldGroup(parent, prefix, fields, startX, startY, columnWidth, rowHeight)
   -- Descriptor metadata becomes concrete widgets here. This is the key piece that lets trigger
   -- and region types grow without hand-coding every editor field.
@@ -665,6 +695,7 @@ function TwAuras:SetSelectValue(control, value, options)
   end
 end
 
+-- The custom select menu is reused for trigger types, region types, units, operators, and more.
 function TwAuras:OpenSelectMenu(control)
   if not control then
     return
@@ -770,6 +801,7 @@ end
 
 -- Descriptor groups are cached per type so swapping trigger/region types reuses widgets instead
 -- of constantly recreating checkbox globals and edit boxes.
+-- Cached descriptor groups keep the config responsive when switching trigger or region types repeatedly.
 function TwAuras:EnsureDescriptorFieldGroup(cacheKey, parent, prefix, definition, startX, startY, columnWidth, rowHeight)
   local frame = self.configFrame
   if not frame then
@@ -798,6 +830,7 @@ function TwAuras:GetDescriptorGroupHeight(definition, rowHeight)
   return math.max(1, rows * rowHeight)
 end
 
+-- Picker filters are split from picker construction so searches can rerender existing rows cheaply.
 function TwAuras:RefreshIconPickerFilter()
   -- The picker reuses a fixed button pool and simply paginates visible matches. That keeps it
   -- workable even with a large icon manifest on the old client.
@@ -1161,6 +1194,7 @@ function TwAuras:BuildSoundPicker()
   self:RefreshSoundPickerFilter()
 end
 
+-- The wizard is a lightweight launcher for common aura recipes, not a separate editing system.
 function TwAuras:BuildWizardFrame()
   if self.wizardFrame then
     return
@@ -1260,6 +1294,7 @@ function TwAuras:OpenSoundPicker(targetField, label)
 end
 
 -- The aura list is intentionally simple: select on the left, inspect and edit on the right.
+-- Row builders create reusable buttons once, then refresh functions just bind aura data into them.
 function TwAuras:BuildAuraListRows(parent)
   parent.__auraRows = parent.__auraRows or {}
   return parent.__auraRows
@@ -1373,6 +1408,7 @@ function TwAuras:EnsureTriggerListRows(parent, wanted)
   return rows
 end
 
+-- List refreshes only repaint the visible editor state; they do not mutate the saved data themselves.
 function TwAuras:RefreshAuraList()
   -- The left aura pane is intentionally dumb and cheap: just enough summary information to pick
   -- an aura, with all real editing work happening in the detail panel.
@@ -1525,6 +1561,7 @@ function TwAuras:RefreshConditionList()
 end
 
 -- Refreshing the editor from the selected aura keeps the UI stateless and easy to rebuild.
+-- RefreshEditorFields pushes the selected aura's saved data into the current tab widgets.
 function TwAuras:RefreshEditorFields()
   local aura = self:GetSelectedAura()
   local frame = self.configFrame
@@ -1582,9 +1619,19 @@ function TwAuras:RefreshEditorFields()
   frame.alphaSlider:SetValue(aura.display.alpha or 1)
   getglobal(frame.alphaSlider:GetName() .. "Text"):SetText("Alpha: " .. string.format("%.2f", aura.display.alpha or 1))
   frame.enabledCheck:SetChecked(aura.enabled and true or false)
+  frame.displayDebugCheck:SetChecked(aura.debug and aura.debug.display and true or false)
+  frame.triggerDebugCheck:SetChecked(aura.debug and aura.debug.trigger and true or false)
+  frame.conditionsDebugCheck:SetChecked(aura.debug and aura.debug.conditions and true or false)
+  frame.loadDebugCheck:SetChecked(aura.debug and aura.debug.load and true or false)
   frame.inCombatCheck:SetChecked(aura.load and aura.load.inCombat and true or false)
   frame.requireTargetCheck:SetChecked(aura.load and aura.load.requireTarget and true or false)
+  frame.allowWorldCheck:SetChecked(aura.load and aura.load.allowWorld ~= false and true or false)
+  frame.allowDungeonCheck:SetChecked(aura.load and aura.load.allowDungeon ~= false and true or false)
+  frame.allowRaidCheck:SetChecked(aura.load and aura.load.allowRaid ~= false and true or false)
+  frame.allowPvpCheck:SetChecked(aura.load and aura.load.allowPvp ~= false and true or false)
+  frame.allowArenaCheck:SetChecked(aura.load and aura.load.allowArena ~= false and true or false)
   self:SetSelectValue(frame.classBox, (aura.load and aura.load.class) or "", CLASS_OPTIONS)
+  frame.zoneTextBox:SetText((aura.load and aura.load.zoneText) or "")
   frame.updateEventsBox:SetText((aura.load and aura.load.updateEvents) or "")
   self:SetSelectValue(frame.pointBox, (aura.position and aura.position.point) or "CENTER", POINT_OPTIONS)
   self:SetSelectValue(frame.relativePointBox, (aura.position and aura.position.relativePoint) or "CENTER", POINT_OPTIONS)
@@ -1624,6 +1671,7 @@ function TwAuras:RefreshEditorFields()
   frame.soundStopBox:SetText((aura.soundActions and aura.soundActions.stopSound) or "")
 end
 
+-- RefreshConfigUI is the main editor repaint entry point after selection changes or edits.
 function TwAuras:RefreshConfigUI()
   if not self.configFrame then
     return
@@ -1637,6 +1685,7 @@ end
 
 -- Applying writes UI values back into saved config, then rebuilds the region so display changes
 -- never leave stale frame state from an older trigger or region type behind.
+-- Applying editor changes is where widget values get written back into the selected saved aura.
 function TwAuras:ApplyEditorToSelectedAura(isLive)
   -- This is the editor commit point: read widgets, write aura fields, normalize, then rebuild
   -- or refresh the live region so the screen reflects the editor state.
@@ -1646,7 +1695,9 @@ function TwAuras:ApplyEditorToSelectedAura(isLive)
     return
   end
 
-  aura.name = frame.nameBox:GetText()
+  local wantedName = frame.nameBox:GetText()
+  aura.name = self:GetUniqueAuraName(wantedName ~= "" and wantedName or ("New Aura " .. tostring(aura.id)), aura.id)
+  frame.nameBox:SetText(aura.name)
   aura.triggerMode = SafeLower(frame.triggerModeBox.__value or "all")
   self:EnsureSingleBlankTrigger(aura)
 
@@ -1713,9 +1764,20 @@ function TwAuras:ApplyEditorToSelectedAura(isLive)
   aura.soundActions.stopSound = frame.soundStopBox:GetText() or ""
 
   aura.enabled = frame.enabledCheck:GetChecked() and true or false
+  aura.debug = aura.debug or self:CreateDefaultDebugOptions()
+  aura.debug.display = frame.displayDebugCheck:GetChecked() and true or false
+  aura.debug.trigger = frame.triggerDebugCheck:GetChecked() and true or false
+  aura.debug.conditions = frame.conditionsDebugCheck:GetChecked() and true or false
+  aura.debug.load = frame.loadDebugCheck:GetChecked() and true or false
   aura.load.inCombat = frame.inCombatCheck:GetChecked() and true or false
   aura.load.requireTarget = frame.requireTargetCheck:GetChecked() and true or false
+  aura.load.allowWorld = frame.allowWorldCheck:GetChecked() and true or false
+  aura.load.allowDungeon = frame.allowDungeonCheck:GetChecked() and true or false
+  aura.load.allowRaid = frame.allowRaidCheck:GetChecked() and true or false
+  aura.load.allowPvp = frame.allowPvpCheck:GetChecked() and true or false
+  aura.load.allowArena = frame.allowArenaCheck:GetChecked() and true or false
   aura.load.class = frame.classBox.__value
+  aura.load.zoneText = frame.zoneTextBox:GetText() or ""
   aura.load.updateEvents = frame.updateEventsBox:GetText() or ""
   if aura.load.class == "" then
     aura.load.class = nil
@@ -1740,6 +1802,7 @@ function TwAuras:ApplyEditorToSelectedAura(isLive)
 end
 
 -- BuildConfigFrame creates the static shell once; later updates only swap values and descriptor groups.
+-- BuildConfigFrame creates the whole editor once; later calls simply show, hide, and refresh it.
 function TwAuras:BuildConfigFrame()
   -- The config frame is built once and reused. This avoids recreating many widget globals and
   -- keeps editor refreshes about swapping values rather than rebuilding the shell.
@@ -1881,6 +1944,7 @@ function TwAuras:BuildConfigFrame()
     end
   end)
   MakeLabel(triggerTab, "all, any, priority", 430, -8)
+  frame.triggerDebugCheck = MakeCheck(triggerTab, "TwAurasTriggerDebugCheck", "Debug Trigger", 500, -8)
 
   frame.triggerListPanel = CreateFrame("Frame", nil, triggerTab)
   frame.triggerListPanel:SetWidth(170)
@@ -1982,6 +2046,7 @@ function TwAuras:BuildConfigFrame()
     TwAuras:RefreshConfigUI()
   end)
   MakeLabel(displayTab, regionTypeList, 216, -8)
+  frame.displayDebugCheck = MakeCheck(displayTab, "TwAurasDisplayDebugCheck", "Debug Display", 500, -8)
   frame.regionDescriptorTitle = displayTab:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   frame.regionDescriptorTitle:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -38)
   frame.regionDescriptorHelp = displayTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -2011,6 +2076,7 @@ function TwAuras:BuildConfigFrame()
   MakeLabel(displayTab, "The fields below are generated from the selected region type.", 250, -346)
 
   local conditionsTab = frame.tabs.conditions
+  frame.conditionsDebugCheck = MakeCheck(conditionsTab, "TwAurasConditionsDebugCheck", "Debug Conditions", 500, -8)
   frame.conditionListPanel = CreateFrame("Frame", nil, conditionsTab)
   frame.conditionListPanel:SetWidth(170)
   frame.conditionListPanel:SetHeight(300)
@@ -2134,23 +2200,42 @@ function TwAuras:BuildConfigFrame()
   frame.enabledCheck = CreateFrame("CheckButton", "TwAurasEnabledCheck", loadTab, "UICheckButtonTemplate")
   frame.enabledCheck:SetPoint("TOPLEFT", loadTab, "TOPLEFT", 8, -8)
   getglobal("TwAurasEnabledCheckText"):SetText("Enabled")
+  frame.loadDebugCheck = MakeCheck(loadTab, "TwAurasLoadDebugCheck", "Debug Load", 500, -8)
   frame.inCombatCheck = CreateFrame("CheckButton", "TwAurasInCombatCheck", loadTab, "UICheckButtonTemplate")
   frame.inCombatCheck:SetPoint("TOPLEFT", loadTab, "TOPLEFT", 8, -36)
   getglobal("TwAurasInCombatCheckText"):SetText("Only In Combat")
   frame.requireTargetCheck = CreateFrame("CheckButton", "TwAurasRequireTargetCheck", loadTab, "UICheckButtonTemplate")
   frame.requireTargetCheck:SetPoint("TOPLEFT", loadTab, "TOPLEFT", 8, -64)
   getglobal("TwAurasRequireTargetCheckText"):SetText("Require Target")
-  MakeLabel(loadTab, "Class", 8, -104)
-  frame.classBox = MakeSelect(loadTab, 120, 20, 108, -100, CLASS_OPTIONS, function()
+  frame.allowWorldCheck = CreateFrame("CheckButton", "TwAurasAllowWorldCheck", loadTab, "UICheckButtonTemplate")
+  frame.allowWorldCheck:SetPoint("TOPLEFT", loadTab, "TOPLEFT", 240, -8)
+  getglobal("TwAurasAllowWorldCheckText"):SetText("World (No Instance)")
+  frame.allowDungeonCheck = CreateFrame("CheckButton", "TwAurasAllowDungeonCheck", loadTab, "UICheckButtonTemplate")
+  frame.allowDungeonCheck:SetPoint("TOPLEFT", loadTab, "TOPLEFT", 240, -36)
+  getglobal("TwAurasAllowDungeonCheckText"):SetText("Dungeons")
+  frame.allowRaidCheck = CreateFrame("CheckButton", "TwAurasAllowRaidCheck", loadTab, "UICheckButtonTemplate")
+  frame.allowRaidCheck:SetPoint("TOPLEFT", loadTab, "TOPLEFT", 240, -64)
+  getglobal("TwAurasAllowRaidCheckText"):SetText("Raids")
+  frame.allowPvpCheck = CreateFrame("CheckButton", "TwAurasAllowPvpCheck", loadTab, "UICheckButtonTemplate")
+  frame.allowPvpCheck:SetPoint("TOPLEFT", loadTab, "TOPLEFT", 240, -92)
+  getglobal("TwAurasAllowPvpCheckText"):SetText("Battlegrounds")
+  frame.allowArenaCheck = CreateFrame("CheckButton", "TwAurasAllowArenaCheck", loadTab, "UICheckButtonTemplate")
+  frame.allowArenaCheck:SetPoint("TOPLEFT", loadTab, "TOPLEFT", 240, -120)
+  getglobal("TwAurasAllowArenaCheckText"):SetText("Arenas")
+  MakeLabel(loadTab, "Class", 8, -160)
+  frame.classBox = MakeSelect(loadTab, 120, 20, 108, -156, CLASS_OPTIONS, function()
     if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
-  MakeLabel(loadTab, "ROGUE, DRUID, WARRIOR, etc. Leave blank for all", 216, -104)
-  MakeLabel(loadTab, "Update Events", 8, -138)
-  frame.updateEventsBox = MakeEditBox(loadTab, 280, 20, 108, -134)
-  MakeLabel(loadTab, "world, combat, target, auras, power, combo, health", 8, -164)
-  MakeLabel(loadTab, "Leave blank to infer updates from the aura's triggers and load conditions.", 8, -184)
+  MakeLabel(loadTab, "ROGUE, DRUID, WARRIOR, etc. Leave blank for all", 216, -160)
+  MakeLabel(loadTab, "Zone Text", 8, -194)
+  frame.zoneTextBox = MakeEditBox(loadTab, 280, 20, 108, -190)
+  MakeLabel(loadTab, "Partial match against the current zone or sub zone.", 8, -220)
+  MakeLabel(loadTab, "Update Events", 8, -254)
+  frame.updateEventsBox = MakeEditBox(loadTab, 280, 20, 108, -250)
+  MakeLabel(loadTab, "world, combat, target, auras, power, combo, health, zone", 8, -280)
+  MakeLabel(loadTab, "Leave blank to infer updates from the aura's triggers and load conditions.", 8, -300)
 
   local positionTab = displayTab
   MakeLabel(positionTab, "Position", 8, -360)
@@ -2191,6 +2276,7 @@ function TwAuras:BuildConfigFrame()
   self:ShowConfigTab("display")
 end
 
+-- Tab switching keeps one persistent frame and swaps visible panels instead of rebuilding windows.
 function TwAuras:ShowConfigTab(tabName)
   if not self.configFrame or not self.configFrame.tabs then
     return
@@ -2205,6 +2291,7 @@ function TwAuras:ShowConfigTab(tabName)
   end
 end
 
+-- Minimize mode collapses the editor down to its banner so users can see the game world underneath.
 function TwAuras:SetConfigMinimized(flag)
   local frame = self.configFrame
   local key, panel
@@ -2301,6 +2388,7 @@ function TwAuras:ToggleConfigMinimized()
   self:SetConfigMinimized(not self.configFrame.minimized)
 end
 
+-- Combat guards keep the editor out of risky in-combat mutation paths on old clients.
 function TwAuras:IsPlayerInCombat()
   return UnitAffectingCombat and UnitAffectingCombat("player") and true or false
 end
@@ -2339,6 +2427,7 @@ function TwAuras:HandleCombatConfigState(eventName)
   end
 end
 
+-- ToggleConfig is the only public entry point the slash command needs for config visibility.
 function TwAuras:ToggleConfig()
   -- Slash commands and any future menu entry points all flow through this one toggle.
   if self.configFrame and self.configFrame:IsShown() then
