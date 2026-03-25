@@ -1,7 +1,7 @@
 # TwAuras
 
-Addon Version: `0.1.35`  
-Readme Version: `0.1.20`
+Addon Version: `0.1.39`  
+Readme Version: `0.1.24`
 
 TwAuras is a lightweight WeakAuras-style addon for TurtleWoW / WoW 1.12 focused on building configurable icons, bars, text trackers, and party/raid frame overlays in game.
 

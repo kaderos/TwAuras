@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.37
+-- TwAuras file version: 0.1.39
 -- Config.lua owns editor-only concerns: aura CRUD, dynamic trigger lists, and descriptor-driven widgets.
 local function SafeLower(value)
   if not value then
@@ -63,6 +63,25 @@ local function AttachHoverTooltip(widget, tooltipText)
   end)
   widget:SetScript("OnLeave", function()
     GameTooltip:Hide()
+  end)
+end
+
+local function AttachObjectSummaryTooltip(widget)
+  if not widget then
+    return
+  end
+  widget:SetScript("OnEnter", function()
+    if not GameTooltip then
+      return
+    end
+    GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+    GameTooltip:SetText(TwAuras:GetObjectSummaryTooltipText(), 1, 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  widget:SetScript("OnLeave", function()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
   end)
 end
 
@@ -1404,7 +1423,15 @@ function TwAuras:RefreshObjectSummary()
   if not self.configFrame or not self.configFrame.objectSummaryText then
     return
   end
-  self.configFrame.objectSummaryText:SetText("Objects: " .. tostring(self:GetObjectSummaryCount()))
+  local total = self:GetObjectSummaryCount()
+  local r, g, b = self:GetObjectSummaryLoadColor(total)
+  self.configFrame.objectSummaryText:SetText("Objects: " .. tostring(total))
+  if self.configFrame.objectSummaryText.SetTextColor then
+    self.configFrame.objectSummaryText:SetTextColor(r, g, b)
+  end
+  if self.configFrame.objectSummarySwatch and self.configFrame.objectSummarySwatch.SetBackdropColor then
+    self.configFrame.objectSummarySwatch:SetBackdropColor(r, g, b, 1)
+  end
 end
 
 -- Trigger rows are separate from trigger fields so one aura can own many conditions cleanly.
@@ -1764,11 +1791,30 @@ function TwAuras:BuildConfigFrame()
   frame.auraListScroll:SetScrollChild(frame.auraListContent)
   frame.auraRows = self:BuildAuraListRows(frame.auraListContent)
   frame.deleteButton = MakeButton(frame.leftPanel, "Delete", 76, 22, 6, -490, function() TwAuras:DeleteSelectedAura() end)
+  frame.objectSummarySwatch = CreateFrame("Frame", nil, frame.leftPanel)
+  frame.objectSummarySwatch:SetWidth(12)
+  frame.objectSummarySwatch:SetHeight(12)
+  frame.objectSummarySwatch:SetPoint("LEFT", frame.deleteButton, "RIGHT", 8, 0)
+  frame.objectSummarySwatch:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true,
+    tileSize = 16,
+    edgeSize = 12,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 }
+  })
+  frame.objectSummarySwatch:SetBackdropColor(0.25, 0.95, 0.35, 1)
   frame.objectSummaryText = frame.leftPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  frame.objectSummaryText:SetPoint("LEFT", frame.deleteButton, "RIGHT", 8, 0)
-  frame.objectSummaryText:SetWidth(120)
+  frame.objectSummaryText:SetPoint("LEFT", frame.objectSummarySwatch, "RIGHT", 6, 0)
+  frame.objectSummaryText:SetWidth(102)
   frame.objectSummaryText:SetJustifyH("LEFT")
   frame.objectSummaryText:SetText("Objects: 0")
+  frame.objectSummaryHitbox = CreateFrame("Frame", nil, frame.leftPanel)
+  frame.objectSummaryHitbox:SetWidth(122)
+  frame.objectSummaryHitbox:SetHeight(18)
+  frame.objectSummaryHitbox:SetPoint("LEFT", frame.objectSummarySwatch, "LEFT", 0, 0)
+  frame.objectSummaryHitbox:EnableMouse(true)
+  AttachObjectSummaryTooltip(frame.objectSummaryHitbox)
 
   frame.rightPanel = CreateFrame("Frame", nil, frame)
   frame.rightPanel:SetWidth(680)

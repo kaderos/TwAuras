@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.30
+-- TwAuras file version: 0.1.34
 local function dirname(path)
   local normalized = string.gsub(path, "\\", "/")
   return string.match(normalized, "^(.*)/[^/]+$") or "."
@@ -62,6 +62,7 @@ local function fresh_runtime()
   TwAuras.regions = {}
   TwAuras.configFrame = nil
   TwAuras.objectTrackerFrame = nil
+  stub.clear_messages()
   stub.set_spellbook({})
   stub.set_unit_buffs("player", {})
   stub.set_unit_debuffs("target", {})
@@ -634,6 +635,35 @@ add_test("legacy aura array migrates into aura store", function()
   assert_true(TwAuras.db.auras == nil, "legacy aura array should be removed after migration")
 end)
 
+add_test("variables loaded applies combat log range defaults", function()
+  fresh_runtime()
+  local messages
+  local i
+  local sawRangeMessage = false
+  local sawConfigMessage = false
+
+  TwAuras:OnEvent("VARIABLES_LOADED")
+
+  assert_equal(stub.get_cvar("CombatLogRangeParty"), "200", "party combat log range should be set to 200")
+  assert_equal(stub.get_cvar("CombatLogRangePartyPet"), "200", "party pet combat log range should be set to 200")
+  assert_equal(stub.get_cvar("CombatLogRangeFriendlyPlayers"), "200", "friendly player combat log range should be set to 200")
+  assert_equal(stub.get_cvar("CombatLogRangeFriendlyPlayersPets"), "200", "friendly player pet combat log range should be set to 200")
+  assert_equal(stub.get_cvar("CombatLogRangeHostilePlayers"), "200", "hostile player combat log range should be set to 200")
+    assert_equal(stub.get_cvar("CombatLogRangeHostilePlayersPets"), "200", "hostile player pet combat log range should be set to 200")
+    assert_equal(stub.get_cvar("CombatLogRangeCreature"), "200", "creature combat log range should be set to 200")
+    messages = stub.get_messages()
+    for i = 1, table.getn(messages) do
+      if string.find(messages[i] or "", "Combat log range set to 200 yards.", 1, true) ~= nil then
+        sawRangeMessage = true
+      end
+      if string.find(messages[i] or "", "Type /twa to open the config.", 1, true) ~= nil then
+        sawConfigMessage = true
+      end
+    end
+    assert_true(sawRangeMessage, "startup should announce the combat log range change")
+    assert_true(sawConfigMessage, "startup should remind the user how to open config")
+  end)
+
 add_test("aura store order drives returned aura list", function()
   TwAuras.db = {
     nextId = 4,
@@ -790,6 +820,71 @@ add_test("object summary decreases as runtime objects expire or clear", function
   assert_equal(TwAuras:GetObjectSummaryCount(), 3, "expired timers, expired debuffs, cleared buffs, and cleared overlays should drop out of the summary")
 end)
 
+add_test("object summary load color uses green yellow and red bands", function()
+  fresh_runtime()
+  local r1, g1, b1 = TwAuras:GetObjectSummaryLoadColor(150)
+  local r2, g2, b2 = TwAuras:GetObjectSummaryLoadColor(200)
+  local r3, g3, b3 = TwAuras:GetObjectSummaryLoadColor(300)
+
+  assert_equal(string.format("%.2f/%.2f/%.2f", r1, g1, b1), "0.25/0.95/0.35", "low object counts should be green")
+  assert_equal(string.format("%.2f/%.2f/%.2f", r2, g2, b2), "1.00/0.82/0.20", "mid object counts should be yellow")
+  assert_equal(string.format("%.2f/%.2f/%.2f", r3, g3, b3), "1.00/0.32/0.32", "high object counts should be red")
+end)
+
+add_test("object summary breakdown matches the total count", function()
+  fresh_runtime()
+  stub.set_time(100)
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {1},
+      items = {
+        ["1"] = {
+          id = 1,
+          key = "aura_1",
+          schemaVersion = 1,
+          name = "Aura One",
+          triggers = {
+            { type = "buff" },
+          },
+          conditions = {
+            { check = "active" },
+          },
+          display = {},
+          load = {},
+          position = {},
+          __unitStates = {
+            { unit = "party1", active = true },
+          },
+        },
+      },
+    },
+  }
+  TwAuras.regions = {
+    [1] = {},
+  }
+  TwAuras.runtime.timers = {
+    ["aura_1:1"] = { duration = 5, expirationTime = 104 },
+  }
+  TwAuras.runtime.trackedBuffs = {
+    ["Tank:Rejuvenation"] = { expirationTime = 110 },
+  }
+  TwAuras.runtime.trackedDebuffs = {
+    ["Boss:Rip"] = { expirationTime = 108 },
+  }
+
+  local breakdown = TwAuras:GetObjectSummaryBreakdown()
+  assert_equal(breakdown.auras, 1, "breakdown should count auras")
+  assert_equal(breakdown.triggers, 1, "breakdown should count triggers")
+  assert_equal(breakdown.conditions, 1, "breakdown should count conditions")
+  assert_equal(breakdown.regions, 1, "breakdown should count regions")
+  assert_equal(breakdown.timers, 1, "breakdown should count active timers")
+  assert_equal(breakdown.trackedBuffs, 1, "breakdown should count tracked buffs")
+  assert_equal(breakdown.trackedDebuffs, 1, "breakdown should count tracked debuffs")
+  assert_equal(breakdown.overlays, 1, "breakdown should count overlays")
+  assert_equal(breakdown.total, 8, "breakdown total should match the sum of its parts")
+end)
+
 add_test("active runtime timer count ignores expired empty and zero-duration timers", function()
   fresh_runtime()
   stub.set_time(300)
@@ -863,6 +958,7 @@ end)
 add_test("refresh aura updates object summary text while config is open", function()
   fresh_runtime()
   local objectText = nil
+  local swatchColor = nil
   local aura = {
     id = 720,
     key = "aura_720",
@@ -920,15 +1016,25 @@ add_test("refresh aura updates object summary text while config is open", functi
       SetText = function(_, text)
         objectText = text
       end,
+      SetTextColor = function() end,
+    },
+    objectSummarySwatch = {
+      SetBackdropColor = function(_, r, g, b, a)
+        swatchColor = string.format("%.2f/%.2f/%.2f/%.2f", r, g, b, a)
+      end,
     },
   }
   TwAuras.RefreshObjectSummary = function(self)
-    self.configFrame.objectSummaryText:SetText("Objects: " .. tostring(self:GetObjectSummaryCount()))
+    local total = self:GetObjectSummaryCount()
+    local r, g, b = self:GetObjectSummaryLoadColor(total)
+    self.configFrame.objectSummaryText:SetText("Objects: " .. tostring(total))
+    self.configFrame.objectSummarySwatch:SetBackdropColor(r, g, b, 1)
   end
 
   TwAuras:RefreshAura(aura)
   TwAuras.RefreshObjectSummary = originalRefreshObjectSummary
   assert_equal(objectText, "Objects: 3", "refreshing a visible aura should update the footer summary text")
+  assert_equal(swatchColor, "0.25/0.95/0.35/1.00", "footer summary should use the green band for low object counts")
 end)
 
 add_test("disabled unitframe auras clear stale overlay objects from the summary", function()
@@ -1060,10 +1166,14 @@ add_test("object tracker toggles and refreshes visible text", function()
 
   local shown = false
   local objectText = nil
+  local objectColor = nil
   TwAuras.objectTrackerFrame = {
     text = {
       SetText = function(_, text)
         objectText = text
+      end,
+      SetTextColor = function(_, r, g, b)
+        objectColor = string.format("%.2f/%.2f/%.2f", r, g, b)
       end,
     },
     IsShown = function()
@@ -1080,6 +1190,7 @@ add_test("object tracker toggles and refreshes visible text", function()
   TwAuras:ToggleObjectTracker()
   assert_true(shown, "toggling the tracker on should show the frame")
   assert_equal(objectText, "Objects: 3", "showing the tracker should immediately refresh its text")
+  assert_equal(objectColor, "0.25/0.95/0.35", "low object count tracker should use the green band")
 
   TwAuras:ToggleObjectTracker()
   assert_true(not shown, "toggling the tracker again should hide it")

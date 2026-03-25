@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.20
+-- TwAuras file version: 0.1.23
 -- Addon bootstrap, defaults, and frame event wiring.
 local addonName = "TwAuras"
 
@@ -235,8 +235,38 @@ function TwAuras:RefreshObjectTracker()
   if not self.objectTrackerFrame or not self.objectTrackerFrame:IsShown() then
     return
   end
+  local total = self:GetObjectSummaryCount()
+  local r, g, b = self:GetObjectSummaryLoadColor(total)
   if self.objectTrackerFrame.text then
-    self.objectTrackerFrame.text:SetText("Objects: " .. tostring(self:GetObjectSummaryCount()))
+    self.objectTrackerFrame.text:SetText("Objects: " .. tostring(total))
+    if self.objectTrackerFrame.text.SetTextColor then
+      self.objectTrackerFrame.text:SetTextColor(r, g, b)
+    end
+  end
+  if self.objectTrackerFrame.SetBackdropColor then
+    self.objectTrackerFrame:SetBackdropColor(0, 0, 0, 0.85)
+  end
+  if self.objectTrackerFrame.SetBackdropBorderColor then
+    self.objectTrackerFrame:SetBackdropBorderColor(r, g, b, 1)
+  end
+end
+
+function TwAuras:ApplyCombatLogRangeDefaults()
+  local rangeTargets = {
+    "Party",
+    "PartyPet",
+    "FriendlyPlayers",
+    "FriendlyPlayersPets",
+    "HostilePlayers",
+    "HostilePlayersPets",
+    "Creature",
+  }
+  local i
+  if not SetCVar then
+    return
+  end
+  for i = 1, table.getn(rangeTargets) do
+    SetCVar("CombatLogRange" .. rangeTargets[i], 200)
   end
 end
 
@@ -267,6 +297,19 @@ function TwAuras:EnsureObjectTrackerFrame()
   end)
   frame:SetScript("OnDragStop", function()
     this:StopMovingOrSizing()
+  end)
+  frame:SetScript("OnEnter", function()
+    if not GameTooltip then
+      return
+    end
+    GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+    GameTooltip:SetText(TwAuras:GetObjectSummaryTooltipText(), 1, 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  frame:SetScript("OnLeave", function()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
   end)
 
   frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")

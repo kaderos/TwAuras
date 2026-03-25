@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.9
+-- TwAuras file version: 0.1.11
 local stub = {}
 
 local currentTime = 0
@@ -45,6 +45,7 @@ local partyMembers = 0
 local raidMembers = 0
 local playedSounds = {}
 local tooltipAuraName = nil
+local cvars = {}
 
 local function ensureUnit(unit)
   unitData[unit] = unitData[unit] or {}
@@ -58,6 +59,8 @@ local function makeFrame()
   local frame = {
     scripts = {},
     events = {},
+    width = 0,
+    height = 0,
   }
 
   function frame:SetScript(name, fn)
@@ -71,6 +74,7 @@ local function makeFrame()
   function frame:CreateTexture()
     return {
       SetAllPoints = noop,
+      ClearAllPoints = noop,
       SetTexture = noop,
       SetVertexColor = noop,
       SetDesaturated = noop,
@@ -85,19 +89,22 @@ local function makeFrame()
   function frame:CreateFontString()
     return {
       SetPoint = noop,
+      ClearAllPoints = noop,
       SetJustifyH = noop,
       SetText = noop,
       SetWidth = noop,
       SetTextColor = noop,
       SetFont = noop,
-      ClearAllPoints = noop,
       Show = noop,
       Hide = noop,
     }
   end
 
-  function frame:SetWidth() end
-  function frame:SetHeight() end
+  function frame:SetWidth(value) self.width = value or 0 end
+  function frame:SetHeight(value) self.height = value or 0 end
+  function frame:GetWidth() return self.width or 0 end
+  function frame:GetHeight() return self.height or 0 end
+  function frame:ClearAllPoints() end
   function frame:SetPoint() end
   function frame:SetAllPoints() end
   function frame:SetBackdrop() end
@@ -150,6 +157,14 @@ function stub.install()
 
   _G.GetTime = function()
     return currentTime
+  end
+
+  _G.SetCVar = function(name, value)
+    cvars[name] = tostring(value)
+  end
+
+  _G.GetCVar = function(name)
+    return cvars[name]
   end
 
   _G.date = function()
@@ -501,6 +516,10 @@ function stub.get_messages()
   return messages
 end
 
+function stub.clear_messages()
+  messages = {}
+end
+
 function stub.get_played_sounds()
   return playedSounds
 end
@@ -552,6 +571,10 @@ end
 function stub.set_group_state(values)
   partyMembers = values and values.party or 0
   raidMembers = values and values.raid or 0
+end
+
+function stub.get_cvar(name)
+  return cvars[name]
 end
 
 return stub

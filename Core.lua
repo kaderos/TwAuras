@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.36
+-- TwAuras file version: 0.1.40
 -- Shared table helpers keep saved variables compatible as defaults evolve.
 local function CopyDefaults(src, dst)
   if type(src) ~= "table" then
@@ -583,32 +583,79 @@ function TwAuras:GetActiveOverlayCount()
   return total
 end
 
-function TwAuras:GetObjectSummaryCount()
+function TwAuras:GetObjectSummaryBreakdown()
   local total = 0
   local auras = self:GetAuraList()
+  local breakdown = {
+    auras = 0,
+    triggers = 0,
+    conditions = 0,
+    regions = 0,
+    timers = 0,
+    trackedBuffs = 0,
+    trackedDebuffs = 0,
+    overlays = 0,
+  }
   local i
   local j
   for i = 1, table.getn(auras) do
     local aura = auras[i]
+    breakdown.auras = breakdown.auras + 1
     total = total + 1
-    for j = 1, table.getn(aura.triggers or {}) do
-      if aura.triggers[j] and aura.triggers[j].type ~= "none" then
-        total = total + 1
+      for j = 1, table.getn(aura.triggers or {}) do
+        if aura.triggers[j] and aura.triggers[j].type ~= "none" then
+          breakdown.triggers = breakdown.triggers + 1
+          total = total + 1
+        end
       end
-    end
-    total = total + table.getn(aura.conditions or {})
+      breakdown.conditions = breakdown.conditions + table.getn(aura.conditions or {})
+      total = total + table.getn(aura.conditions or {})
   end
 
   for i in pairs(self.regions or {}) do
+    breakdown.regions = breakdown.regions + 1
     total = total + 1
   end
 
-  total = total + self:GetActiveRuntimeTimerCount()
-  total = total + self:GetTrackedRuntimeEntryCount(self.runtime and self.runtime.trackedBuffs or nil)
-  total = total + self:GetTrackedRuntimeEntryCount(self.runtime and self.runtime.trackedDebuffs or nil)
-  total = total + self:GetActiveOverlayCount()
+  breakdown.timers = self:GetActiveRuntimeTimerCount()
+  breakdown.trackedBuffs = self:GetTrackedRuntimeEntryCount(self.runtime and self.runtime.trackedBuffs or nil)
+  breakdown.trackedDebuffs = self:GetTrackedRuntimeEntryCount(self.runtime and self.runtime.trackedDebuffs or nil)
+  breakdown.overlays = self:GetActiveOverlayCount()
+  total = total + breakdown.timers
+  total = total + breakdown.trackedBuffs
+  total = total + breakdown.trackedDebuffs
+  total = total + breakdown.overlays
 
-  return total
+  breakdown.total = total
+  return breakdown
+end
+
+function TwAuras:GetObjectSummaryCount()
+  return self:GetObjectSummaryBreakdown().total
+end
+
+function TwAuras:GetObjectSummaryTooltipText()
+  local breakdown = self:GetObjectSummaryBreakdown()
+  return "Object Breakdown\n"
+    .. "Auras: " .. tostring(breakdown.auras) .. "\n"
+    .. "Triggers: " .. tostring(breakdown.triggers) .. "\n"
+    .. "Conditions: " .. tostring(breakdown.conditions) .. "\n"
+    .. "Regions: " .. tostring(breakdown.regions) .. "\n"
+    .. "Timers: " .. tostring(breakdown.timers) .. "\n"
+    .. "Tracked Buffs: " .. tostring(breakdown.trackedBuffs) .. "\n"
+    .. "Tracked Debuffs: " .. tostring(breakdown.trackedDebuffs) .. "\n"
+    .. "Overlays: " .. tostring(breakdown.overlays) .. "\n"
+    .. "Total: " .. tostring(breakdown.total)
+end
+
+function TwAuras:GetObjectSummaryLoadColor(count)
+  local total = tonumber(count) or 0
+  if total <= 150 then
+    return 0.25, 0.95, 0.35
+  elseif total <= 250 then
+    return 1.0, 0.82, 0.2
+  end
+  return 1.0, 0.32, 0.32
 end
 
 function TwAuras:RefreshDebugObjectDisplays()
@@ -2338,6 +2385,9 @@ function TwAuras:OnEvent(eventName, eventUnit)
   end
   if eventName == "VARIABLES_LOADED" then
     self:InitializeDB()
+    self:ApplyCombatLogRangeDefaults()
+    self:Print("Combat log range set to 200 yards.")
+    self:Print("Type /twa to open the config.")
     self.runtime.lastPlayerComboPoints = GetComboPoints("player", "target") or 0
     self:UpdateEnergyTickTracking()
     self:UpdateManaFiveSecondRuleTracking()
