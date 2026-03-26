@@ -8,6 +8,12 @@ local function SafeLower(value)
   return string.lower(value)
 end
 
+local generatedWidgetId = 0
+local function NextWidgetName(prefix)
+  generatedWidgetId = generatedWidgetId + 1
+  return "TwAuras" .. tostring(prefix or "Widget") .. tostring(generatedWidgetId)
+end
+
 -- The config reuses the same hue math as the region runtime so previews match in-game rendering.
 local function HueToRGB(hue)
   local normalized = (tonumber(hue) or 0) / 60
@@ -38,7 +44,7 @@ end
 
 -- Edit boxes stay non-autofocused so opening the config never steals movement keys unexpectedly.
 local function MakeEditBox(parent, width, height, x, y)
-  local eb = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+  local eb = CreateFrame("EditBox", NextWidgetName("EditBox"), parent, "InputBoxTemplate")
   eb:SetAutoFocus(false)
   eb:SetWidth(width)
   eb:SetHeight(height)
@@ -48,7 +54,7 @@ end
 
 -- Buttons all route through one helper so the config layout can be rebuilt with less repetition.
 local function MakeButton(parent, text, width, height, x, y, onClick)
-  local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  local button = CreateFrame("Button", NextWidgetName("Button"), parent, "UIPanelButtonTemplate")
   button:SetWidth(width)
   button:SetHeight(height)
   button:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -127,7 +133,7 @@ end
 
 -- TwAuras uses a lightweight custom select menu instead of Blizzard dropdowns for simpler control.
 local function MakeSelect(parent, width, height, x, y, options, onChanged)
-  local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  local button = CreateFrame("Button", NextWidgetName("Select"), parent, "UIPanelButtonTemplate")
   button:SetWidth(width)
   button:SetHeight(height)
   button:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -155,6 +161,9 @@ end
 
 -- Checkboxes use Blizzard templates but are wrapped here to keep the frame builder compact.
 local function MakeCheck(parent, globalName, text, x, y)
+  if not globalName or globalName == "" then
+    globalName = NextWidgetName("Check")
+  end
   local check = CreateFrame("CheckButton", globalName, parent, "UICheckButtonTemplate")
   check:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
   getglobal(globalName .. "Text"):SetText(text)
@@ -1257,7 +1266,7 @@ function TwAuras:BuildSoundPicker()
   frame.rows = {}
   local i
   for i = 1, table.getn(SOUND_PICKER_SOUNDS) do
-    local button = CreateFrame("Button", nil, frame.scrollChild, "UIPanelButtonTemplate")
+    local button = CreateFrame("Button", NextWidgetName("SoundRowButton"), frame.scrollChild, "UIPanelButtonTemplate")
     button:SetWidth(402)
     button:SetHeight(20)
     button:SetPoint("TOPLEFT", frame.scrollChild, "TOPLEFT", 0, -((i - 1) * 24))
@@ -1426,7 +1435,7 @@ function TwAuras:EnsureAuraListRows(parent, wanted)
     button.icon:SetWidth(14)
     button.icon:SetHeight(14)
     button.icon:SetPoint("LEFT", button, "LEFT", 4, 0)
-    button.previewCheck = CreateFrame("CheckButton", nil, button, "UICheckButtonTemplate")
+    button.previewCheck = CreateFrame("CheckButton", NextWidgetName("AuraRowPreviewCheck"), button, "UICheckButtonTemplate")
     button.previewCheck:SetWidth(18)
     button.previewCheck:SetHeight(18)
     button.previewCheck:SetPoint("RIGHT", button, "RIGHT", 0, 0)
@@ -2037,7 +2046,7 @@ function TwAuras:BuildConfigFrame()
   local tabStartX = math.floor((960 - totalTabWidth - 46 - 4) / 2)
   local i
   for i = 1, table.getn(tabNames) do
-    local button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    local button = CreateFrame("Button", NextWidgetName("ConfigTabButton"), frame, "UIPanelButtonTemplate")
     button:SetWidth(102)
     button:SetHeight(20)
     button:SetPoint("TOPLEFT", frame, "TOPLEFT", tabStartX + ((i - 1) * 106), -8)
@@ -2046,7 +2055,7 @@ function TwAuras:BuildConfigFrame()
     button:SetScript("OnClick", function() TwAuras:ShowConfigTab(this.__tab) end)
     frame.tabButtons[i] = button
   end
-  frame.minimizeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  frame.minimizeButton = CreateFrame("Button", NextWidgetName("ConfigMinimizeButton"), frame, "UIPanelButtonTemplate")
   frame.minimizeButton:SetWidth(46)
   frame.minimizeButton:SetHeight(20)
   frame.minimizeButton:SetPoint("TOPLEFT", frame, "TOPLEFT", tabStartX + totalTabWidth + 4, -8)
@@ -2058,10 +2067,10 @@ function TwAuras:BuildConfigFrame()
   -- Keep the header and summary fixed while each major editor tab scrolls independently.
   -- The actual tab panels stay as the scroll children so the existing widget parenting can remain intact.
   frame.tabScrolls = {
-    trigger = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
-    display = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
-    conditions = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
-    load = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    trigger = CreateFrame("ScrollFrame", "TwAurasTriggerTabScroll", frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    display = CreateFrame("ScrollFrame", "TwAurasDisplayTabScroll", frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    conditions = CreateFrame("ScrollFrame", "TwAurasConditionsTabScroll", frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    load = CreateFrame("ScrollFrame", "TwAurasLoadTabScroll", frame.rightPanel, "UIPanelScrollFrameTemplate"),
   }
   frame.tabs = {
     trigger = CreateFrame("Frame", nil, frame.rightPanel),
