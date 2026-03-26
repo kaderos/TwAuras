@@ -2055,6 +2055,8 @@ function TwAuras:BuildConfigFrame()
     TwAuras:ToggleConfigMinimized()
   end)
 
+  -- Keep the header and summary fixed while each major editor tab scrolls independently.
+  -- The actual tab panels stay as the scroll children so the existing widget parenting can remain intact.
   frame.tabScrolls = {
     trigger = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
     display = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
@@ -2089,8 +2091,6 @@ function TwAuras:BuildConfigFrame()
   local triggerTab = frame.tabs.trigger
   local regionTypeList = JoinKeys(self:GetAvailableRegionTypes())
   triggerTab:SetHeight(470)
-  MakeLabel(triggerTab, "Name", 8, -8)
-  frame.nameBox = MakeEditBox(triggerTab, 180, 20, 108, -4)
   MakeLabel(triggerTab, "Logic", 300, -8)
   frame.triggerModeBox = MakeSelect(triggerTab, 90, 20, 352, -4, TRIGGER_MODE_OPTIONS, function()
     if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
@@ -2161,6 +2161,8 @@ function TwAuras:BuildConfigFrame()
   frame.triggerFieldPanel:SetWidth(340)
   frame.triggerFieldPanel:SetHeight(210)
   frame.triggerFieldPanel:SetPoint("TOPLEFT", triggerTab, "TOPLEFT", 200, -148)
+  -- Quick presets seed the selected trigger with a practical starter configuration, but they still
+  -- leave the full trigger editor available for the user to refine afterward.
   MakeLabel(triggerTab, "Quick Presets (set selected trigger)", 200, -318)
   frame.presetBuff = MakeButton(triggerTab, "Buff", 60, 20, 200, -340, function()
     local aura = TwAuras:GetSelectedAura()
@@ -2180,41 +2182,40 @@ function TwAuras:BuildConfigFrame()
     if not aura or not trigger then return end
     trigger.type = "power"; trigger.powerType = "energy"; trigger.unit = "player"; aura.regionType = "bar"; TwAuras:EnsureSingleBlankTrigger(aura); TwAuras:RefreshConfigUI()
   end)
-  frame.presetCombo = MakeButton(triggerTab, "Combo", 60, 20, 398, -340, function()
+  frame.presetCL = MakeButton(triggerTab, "Log Timer", 72, 20, 398, -340, function()
     local aura = TwAuras:GetSelectedAura()
     local trigger = TwAuras:GetSelectedTrigger(aura)
     if not aura or not trigger then return end
-    trigger.type = "combo"; aura.regionType = "text"; TwAuras:EnsureSingleBlankTrigger(aura); TwAuras:RefreshConfigUI()
-  end)
-  frame.presetCL = MakeButton(triggerTab, "Log Timer", 72, 20, 464, -340, function()
-    local aura = TwAuras:GetSelectedAura()
-    local trigger = TwAuras:GetSelectedTrigger(aura)
-    if not aura or not trigger then return end
-    trigger.type = "combatlog"; trigger.combatLogEvent = "ANY"; trigger.duration = 10; aura.regionType = "icon"; TwAuras:EnsureSingleBlankTrigger(aura); TwAuras:RefreshConfigUI()
+    -- "Log Timer" is meant to be a fast damage-alert starter, so it defaults to a bar and
+    -- a self-damage creature spell event instead of the old generic ANY event.
+    trigger.type = "combatlog"; trigger.combatLogEvent = "CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE"; trigger.duration = 10; aura.regionType = "bar"; TwAuras:EnsureSingleBlankTrigger(aura); TwAuras:RefreshConfigUI()
   end)
 
   local displayTab = frame.tabs.display
   displayTab:SetHeight(540)
-  MakeLabel(displayTab, "Region Type", 8, -8)
-  frame.regionTypeBox = MakeSelect(displayTab, 120, 20, 108, -4, self:GetAvailableRegionTypes(), function()
+  -- The aura's user-facing name now lives in Display so the creation flow matches the visual-first editor order.
+  MakeLabel(displayTab, "Name", 8, -8)
+  frame.nameBox = MakeEditBox(displayTab, 180, 20, 108, -4)
+  MakeLabel(displayTab, "Region Type", 8, -40)
+  frame.regionTypeBox = MakeSelect(displayTab, 120, 20, 108, -36, self:GetAvailableRegionTypes(), function()
     if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
     TwAuras:RefreshConfigUI()
   end)
-  MakeLabel(displayTab, regionTypeList, 216, -8)
+  MakeLabel(displayTab, regionTypeList, 216, -40)
   frame.displayDebugCheck = MakeCheck(displayTab, "TwAurasDisplayDebugCheck", "Debug Display", 500, -8)
   frame.unitFramesDebugCheck = MakeCheck(displayTab, "TwAurasUnitFramesDebugCheck", "Unit Frame Debug", 500, -36)
   frame.regionDescriptorTitle = displayTab:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  frame.regionDescriptorTitle:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -38)
+  frame.regionDescriptorTitle:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -70)
   frame.regionDescriptorHelp = displayTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  frame.regionDescriptorHelp:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -54)
+  frame.regionDescriptorHelp:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -86)
   frame.regionDescriptorHelp:SetWidth(544)
   frame.regionDescriptorHelp:SetJustifyH("LEFT")
   frame.regionFieldPanel = CreateFrame("Frame", nil, displayTab)
   frame.regionFieldPanel:SetWidth(644)
   frame.regionFieldPanel:SetHeight(260)
-  frame.regionFieldPanel:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -74)
+  frame.regionFieldPanel:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -106)
   frame.regionFieldScroll = CreateFrame("ScrollFrame", "TwAurasRegionFieldScroll", frame.regionFieldPanel, "UIPanelScrollFrameTemplate")
   frame.regionFieldScroll:SetWidth(640)
   frame.regionFieldScroll:SetHeight(260)
@@ -2223,15 +2224,15 @@ function TwAuras:BuildConfigFrame()
   frame.regionFieldContent:SetWidth(620)
   frame.regionFieldContent:SetHeight(1)
   frame.regionFieldScroll:SetScrollChild(frame.regionFieldContent)
-  frame.iconPickerButton = MakeButton(displayTab, "Pick Icon", 90, 20, 548, -4, function() TwAuras:OpenIconPicker() end)
-  frame.alphaSlider = MakeSlider(displayTab, "TwAurasAlphaSlider", 0, 1, 0.05, 8, -344, 220)
+  frame.iconPickerButton = MakeButton(displayTab, "Pick Icon", 90, 20, 548, -36, function() TwAuras:OpenIconPicker() end)
+  frame.alphaSlider = MakeSlider(displayTab, "TwAurasAlphaSlider", 0, 1, 0.05, 8, -376, 220)
   frame.alphaSlider:SetScript("OnValueChanged", function()
     getglobal(this:GetName() .. "Text"):SetText("Alpha: " .. string.format("%.2f", this:GetValue()))
     if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
-  MakeLabel(displayTab, "The fields below are generated from the selected region type.", 250, -346)
+  MakeLabel(displayTab, "The fields below are generated from the selected region type.", 250, -378)
 
   local conditionsTab = frame.tabs.conditions
   conditionsTab:SetHeight(560)
@@ -2398,25 +2399,25 @@ function TwAuras:BuildConfigFrame()
   MakeLabel(loadTab, "Leave blank to infer updates from the aura's triggers and load conditions.", 8, -300)
 
   local positionTab = displayTab
-  MakeLabel(positionTab, "Position", 8, -360)
-  MakeLabel(positionTab, "Anchor Point", 8, -386)
-  frame.pointBox = MakeSelect(positionTab, 120, 20, 108, -382, POINT_OPTIONS, function()
+  MakeLabel(positionTab, "Position", 8, -392)
+  MakeLabel(positionTab, "Anchor Point", 8, -418)
+  frame.pointBox = MakeSelect(positionTab, 120, 20, 108, -414, POINT_OPTIONS, function()
     if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
-  MakeLabel(positionTab, "Relative Point", 230, -386)
-  frame.relativePointBox = MakeSelect(positionTab, 120, 20, 340, -382, POINT_OPTIONS, function()
+  MakeLabel(positionTab, "Relative Point", 230, -418)
+  frame.relativePointBox = MakeSelect(positionTab, 120, 20, 340, -414, POINT_OPTIONS, function()
     if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
-  MakeLabel(positionTab, "X", 8, -416)
-  frame.xBox = MakeEditBox(positionTab, 80, 20, 108, -412)
-  MakeLabel(positionTab, "Y", 230, -416)
-  frame.yBox = MakeEditBox(positionTab, 80, 20, 340, -412)
+  MakeLabel(positionTab, "X", 8, -448)
+  frame.xBox = MakeEditBox(positionTab, 80, 20, 108, -444)
+  MakeLabel(positionTab, "Y", 230, -448)
+  frame.yBox = MakeEditBox(positionTab, 80, 20, 340, -444)
   frame.unlockHelp = positionTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  frame.unlockHelp:SetPoint("TOPLEFT", positionTab, "TOPLEFT", 8, -444)
+  frame.unlockHelp:SetPoint("TOPLEFT", positionTab, "TOPLEFT", 8, -476)
   frame.unlockHelp:SetWidth(520)
   frame.unlockHelp:SetJustifyH("LEFT")
   frame.unlockHelp:SetText("Use Unlock and drag regions on screen. Use the Debug button below to inspect recent combat log lines and copy the event name plus match text into combat log triggers.")
@@ -2444,6 +2445,7 @@ function TwAuras:BuildConfigFrame()
 end
 
 -- Tab switching keeps one persistent frame and swaps visible panels instead of rebuilding windows.
+-- Scroll positions reset on tab change so each tab reopens at the top of its own editor body.
 function TwAuras:ShowConfigTab(tabName)
   if not self.configFrame or not self.configFrame.tabs then
     return

@@ -37,7 +37,11 @@ local TRACKED_DEBUFF_CATALOG = {
 
   -- HUNTER
   ["concussive shot"] = { name = "Concussive Shot", class = "HUNTER", duration = 4 },
+  ["counterattack"] = { name = "Counterattack", class = "HUNTER", duration = 5 },
+  ["freezing trap effect"] = { name = "Freezing Trap Effect", class = "HUNTER", duration = 20 },
   ["hunter's mark"] = { name = "Hunter's Mark", class = "HUNTER", duration = 120 },
+  ["immolation trap"] = { name = "Immolation Trap", class = "HUNTER", duration = 15 },
+  ["intimidation"] = { name = "Intimidation", class = "HUNTER", duration = 3 },
   ["scare beast"] = { name = "Scare Beast", class = "HUNTER", duration = 20 },
   ["scorpid sting"] = { name = "Scorpid Sting", class = "HUNTER", duration = 20 },
   ["scatter shot"] = { name = "Scatter Shot", class = "HUNTER", duration = 4 },
@@ -54,7 +58,10 @@ local TRACKED_DEBUFF_CATALOG = {
   ["frost nova"] = { name = "Frost Nova", class = "MAGE", duration = 8 },
   ["frostbolt"] = { name = "Frostbolt", class = "MAGE", duration = 5 },
   ["improved scorch"] = { name = "Improved Scorch", class = "MAGE", duration = 30 },
+  ["ignite"] = { name = "Ignite", class = "MAGE", duration = 4 },
   ["polymorph"] = { name = "Polymorph", class = "MAGE", duration = 20 },
+  ["pyroblast"] = { name = "Pyroblast", class = "MAGE", duration = 12 },
+  ["winter's chill"] = { name = "Winter's Chill", class = "MAGE", duration = 15 },
 
   -- PALADIN
   ["hammer of justice"] = { name = "Hammer of Justice", class = "PALADIN", duration = 6 },
@@ -81,6 +88,7 @@ local TRACKED_DEBUFF_CATALOG = {
   ["expose armor"] = { name = "Expose Armor", class = "ROGUE", duration = 30 },
   ["garrote"] = { name = "Garrote", class = "ROGUE", duration = 18 },
   ["gouge"] = { name = "Gouge", class = "ROGUE", duration = 4 },
+  ["kick - silenced"] = { name = "Kick - Silenced", class = "ROGUE", duration = 2 },
   ["kidney shot"] = { name = "Kidney Shot", class = "ROGUE", comboDurations = {1, 2, 3, 4, 5} },
   ["mind-numbing poison"] = { name = "Mind-numbing Poison", class = "ROGUE", duration = 14 },
   ["rupture"] = { name = "Rupture", class = "ROGUE", comboDurations = {8, 10, 12, 14, 16} },
@@ -95,21 +103,26 @@ local TRACKED_DEBUFF_CATALOG = {
   ["stormstrike"] = { name = "Stormstrike", class = "SHAMAN", duration = 12 },
 
   -- WARLOCK
+  ["banish"] = { name = "Banish", class = "WARLOCK", duration = 20 },
   ["corruption"] = { name = "Corruption", class = "WARLOCK", duration = 18 },
   ["curse of agony"] = { name = "Curse of Agony", class = "WARLOCK", duration = 24 },
   ["curse of doom"] = { name = "Curse of Doom", class = "WARLOCK", duration = 60 },
   ["curse of elements"] = { name = "Curse of Elements", class = "WARLOCK", duration = 300 },
   ["curse of exhaustion"] = { name = "Curse of Exhaustion", class = "WARLOCK", duration = 12 },
+  ["curse of idiocy"] = { name = "Curse of Idiocy", class = "WARLOCK", duration = 120 },
   ["curse of recklessness"] = { name = "Curse of Recklessness", class = "WARLOCK", duration = 120 },
   ["curse of shadow"] = { name = "Curse of Shadow", class = "WARLOCK", duration = 300 },
   ["curse of tongues"] = { name = "Curse of Tongues", class = "WARLOCK", duration = 30 },
   ["curse of weakness"] = { name = "Curse of Weakness", class = "WARLOCK", duration = 120 },
   ["death coil"] = { name = "Death Coil", class = "WARLOCK", duration = 3 },
   ["fear"] = { name = "Fear", class = "WARLOCK", duration = 20 },
+  ["howl of terror"] = { name = "Howl of Terror", class = "WARLOCK", duration = 10 },
   ["immolate"] = { name = "Immolate", class = "WARLOCK", duration = 15 },
+  ["shadow vulnerability"] = { name = "Shadow Vulnerability", class = "WARLOCK", duration = 12 },
   ["siphon life"] = { name = "Siphon Life", class = "WARLOCK", duration = 30 },
 
   -- WARRIOR
+  ["charge stun"] = { name = "Charge Stun", class = "WARRIOR", duration = 1 },
   ["concussion blow"] = { name = "Concussion Blow", class = "WARRIOR", duration = 5 },
   ["deep wounds"] = { name = "Deep Wounds", class = "WARRIOR", duration = 12 },
   ["demoralizing shout"] = { name = "Demoralizing Shout", class = "WARRIOR", duration = 30 },
@@ -120,6 +133,7 @@ local TRACKED_DEBUFF_CATALOG = {
   ["mocking blow"] = { name = "Mocking Blow", class = "WARRIOR", duration = 6 },
   ["piercing howl"] = { name = "Piercing Howl", class = "WARRIOR", duration = 6 },
   ["rend"] = { name = "Rend", class = "WARRIOR", duration = 15 },
+  ["revenge stun"] = { name = "Revenge Stun", class = "WARRIOR", duration = 3 },
   ["shield bash"] = { name = "Shield Bash", class = "WARRIOR", duration = 6 },
   ["sunder armor"] = { name = "Sunder Armor", class = "WARRIOR", duration = 30 },
   ["taunt"] = { name = "Taunt", class = "WARRIOR", duration = 3 },
