@@ -14,6 +14,32 @@ local function NextWidgetName(prefix)
   return "TwAuras" .. tostring(prefix or "Widget") .. tostring(generatedWidgetId)
 end
 
+-- Keep config and popup windows interactable by forcing them above the main editor stack.
+local function BringFrameToFront(frame, owner, isPopup)
+  local baseLevel = 0
+  local bump = isPopup and 40 or 20
+  local wanted = bump
+  if not frame then
+    return
+  end
+  if owner and owner.GetFrameLevel then
+    baseLevel = owner:GetFrameLevel() or 0
+  end
+  wanted = math.max(baseLevel + bump, 1)
+  if frame.SetToplevel then
+    frame:SetToplevel(true)
+  end
+  if frame.SetFrameStrata then
+    frame:SetFrameStrata(isPopup and "FULLSCREEN_DIALOG" or "DIALOG")
+  end
+  if frame.SetFrameLevel then
+    frame:SetFrameLevel(wanted)
+  end
+  if frame.Raise then
+    frame:Raise()
+  end
+end
+
 -- The config reuses the same hue math as the region runtime so previews match in-game rendering.
 local function HueToRGB(hue)
   local normalized = (tonumber(hue) or 0) / 60
@@ -463,6 +489,7 @@ function TwAuras:OpenAuraRowMenu(row)
   menu.__auraId = row.__auraId
   menu:ClearAllPoints()
   menu:SetPoint("TOPLEFT", row, "TOPRIGHT", 2, 0)
+  BringFrameToFront(menu, self.configFrame, true)
   menu:Show()
 end
 
@@ -583,6 +610,7 @@ function TwAuras:OpenDeleteConfirm()
     return
   end
   self:BuildDeleteConfirmFrame()
+  BringFrameToFront(self.deleteConfirmFrame, self.configFrame, true)
   self.deleteConfirmFrame:Show()
 end
 
@@ -641,6 +669,7 @@ function TwAuras:RequestCloseConfigWindow()
   end
   if frame.liveUpdateCheck and not frame.liveUpdateCheck:GetChecked() and self:GetSelectedAura() then
     self:BuildUnsavedCloseFrame()
+    BringFrameToFront(self.unsavedCloseFrame, self.configFrame, true)
     self.unsavedCloseFrame:Show()
     return
   end
@@ -908,6 +937,7 @@ function TwAuras:OpenSelectMenu(control)
     end
   end
 
+  BringFrameToFront(frame, self.configFrame, true)
   frame:Show()
 end
 
@@ -1393,6 +1423,7 @@ end
 
 function TwAuras:OpenWizard()
   self:BuildWizardFrame()
+  BringFrameToFront(self.wizardFrame, self.configFrame, true)
   self.wizardFrame:Show()
 end
 
@@ -1404,6 +1435,7 @@ function TwAuras:OpenIconPicker()
   end
   self.iconPickerFrame.pageIndex = 1
   self:RefreshIconPickerFilter()
+  BringFrameToFront(self.iconPickerFrame, self.configFrame, true)
   self.iconPickerFrame:Show()
 end
 
@@ -1419,6 +1451,7 @@ function TwAuras:OpenSoundPicker(targetField, label)
   end
   self.soundPickerFrame.pageIndex = 1
   self:RefreshSoundPickerFilter()
+  BringFrameToFront(self.soundPickerFrame, self.configFrame, true)
   self.soundPickerFrame:Show()
 end
 
@@ -1968,6 +2001,8 @@ function TwAuras:BuildConfigFrame()
   frame:SetWidth(960)
   frame:SetHeight(620)
   frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  frame:SetToplevel(true)
+  frame:SetFrameStrata("DIALOG")
   frame:SetBackdrop({
     bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
     edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
@@ -2618,6 +2653,7 @@ function TwAuras:OpenConfigWindow()
   self.runtime.pendingConfigOpen = nil
   self:BuildConfigFrame()
   self:SetConfigMinimized(false)
+  BringFrameToFront(self.configFrame, UIParent, false)
   self.configFrame:Show()
   self:RefreshConfigUI()
 end
