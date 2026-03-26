@@ -22,6 +22,11 @@ if string and not string.match and string.find then
   end
 end
 
+-- Some 1.12 Lua builds expose string.gfind but not string.gmatch.
+if string and not string.gmatch and string.gfind then
+  string.gmatch = string.gfind
+end
+
 -- Some 1.12 Lua builds expose math.mod but not math.fmod.
 if math and not math.fmod then
   if math.mod then

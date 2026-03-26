@@ -215,9 +215,18 @@ end
 function TwAuras:SplitList(value)
   local items = {}
   local text = value or ""
+  local gmatch = string.gmatch or string.gfind
   local token
-  for token in string.gmatch(text, "([^,]+)") do
-    token = string.gsub(token, "^%s+", "")
+  if gmatch then
+    for token in gmatch(text, "([^,]+)") do
+      token = string.gsub(token, "^%s+", "")
+      token = string.gsub(token, "%s+$", "")
+      if token ~= "" then
+        table.insert(items, token)
+      end
+    end
+  else
+    token = string.gsub(text, "^%s+", "")
     token = string.gsub(token, "%s+$", "")
     if token ~= "" then
       table.insert(items, token)

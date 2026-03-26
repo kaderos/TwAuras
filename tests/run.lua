@@ -559,6 +559,32 @@ add_test("real mana tokens prefer exact unit mana values when available", functi
   assert_equal(rendered, "2222/3456/1234", "real mana tokens should use exact values before estimates")
 end)
 
+add_test("split list supports clients without string.gmatch", function()
+  fresh_runtime()
+  local originalGmatch = string.gmatch
+  local originalGfind = string.gfind
+  local ok
+  local err
+
+  string.gmatch = nil
+  string.gfind = originalGfind or originalGmatch
+
+  ok, err = pcall(function()
+    local items = TwAuras:SplitList(" player , target, combat ")
+    assert_equal(table.getn(items), 3, "split list should still parse three comma-separated values")
+    assert_equal(items[1], "player", "split list should trim leading whitespace")
+    assert_equal(items[2], "target", "split list should keep middle values")
+    assert_equal(items[3], "combat", "split list should trim trailing whitespace")
+  end)
+
+  string.gmatch = originalGmatch
+  string.gfind = originalGfind
+
+  if not ok then
+    error(err)
+  end
+end)
+
 add_test("normalize aura config migrates legacy single trigger", function()
   local aura = {
     id = 200,
@@ -610,6 +636,31 @@ add_test("normalize aura config adds icon hue defaults", function()
   assert_equal(aura.display.iconHue, 0, "icon hue should default to zero degrees")
   assert_true(aura.display.showCooldownSwipe == false, "cooldown swipe should default to disabled")
   assert_true(aura.display.showCooldownOverlay == false, "cooldown overlay should default to disabled")
+end)
+
+add_test("apply editor ignores re-entrant callback calls", function()
+  fresh_runtime()
+  local originalGetSelectedAura = TwAuras.GetSelectedAura
+  local ok
+  local err
+
+  TwAuras.GetSelectedAura = function()
+    return { id = 1, name = "Reentry", display = {}, load = {}, position = {}, triggers = { { type = "none" } } }
+  end
+  TwAuras.configFrame = {
+    __applyingEditor = true,
+  }
+
+  ok, err = pcall(function()
+    TwAuras:ApplyEditorToSelectedAura(true)
+  end)
+
+  TwAuras.GetSelectedAura = originalGetSelectedAura
+  TwAuras.configFrame = nil
+
+  if not ok then
+    error(err)
+  end
 end)
 
 add_test("legacy aura array migrates into aura store", function()
