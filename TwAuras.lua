@@ -2,6 +2,26 @@
 -- Addon bootstrap, defaults, and frame event wiring.
 local addonName = "TwAuras"
 
+-- WoW 1.12 can run Lua builds without string.match; provide a small compatibility shim.
+if string and not string.match and string.find then
+  function string.match(value, pattern)
+    local startIndex
+    local endIndex
+    local c1, c2, c3, c4, c5, c6, c7, c8
+    if not value or not pattern then
+      return nil
+    end
+    startIndex, endIndex, c1, c2, c3, c4, c5, c6, c7, c8 = string.find(value, pattern)
+    if not startIndex then
+      return nil
+    end
+    if c1 ~= nil then
+      return c1, c2, c3, c4, c5, c6, c7, c8
+    end
+    return string.sub(value, startIndex, endIndex)
+  end
+end
+
 -- Some 1.12 Lua builds expose math.mod but not math.fmod.
 if math and not math.fmod then
   if math.mod then
