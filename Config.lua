@@ -762,7 +762,10 @@ function TwAuras:BuildDescriptorFieldGroup(parent, prefix, fields, startX, start
           local r, g, b = HueToRGB(hue)
           widget.preview:SetBackdropColor(r, g, b, 1)
         end
-        if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+        if TwAuras.configFrame
+          and not TwAuras.configFrame.__suppressLiveUpdate
+          and TwAuras.configFrame.liveUpdateCheck
+          and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
           TwAuras:ApplyEditorToSelectedAura(true)
         end
       end)
@@ -1710,8 +1713,10 @@ function TwAuras:RefreshEditorFields()
   if not frame then
     return
   end
+  frame.__suppressLiveUpdate = true
   if not aura then
     frame.editorTitle:SetText("No aura selected")
+    frame.__suppressLiveUpdate = false
     return
   end
 
@@ -1814,6 +1819,7 @@ function TwAuras:RefreshEditorFields()
   frame.soundActiveBox:SetText((aura.soundActions and aura.soundActions.activeSound) or "")
   frame.soundActiveIntervalBox:SetText(tostring((aura.soundActions and aura.soundActions.activeInterval) or 2))
   frame.soundStopBox:SetText((aura.soundActions and aura.soundActions.stopSound) or "")
+  frame.__suppressLiveUpdate = false
 end
 
 -- RefreshConfigUI is the main editor repaint entry point after selection changes or edits.
@@ -2242,7 +2248,10 @@ function TwAuras:BuildConfigFrame()
   frame.alphaSlider = MakeSlider(displayTab, "TwAurasAlphaSlider", 0, 1, 0.05, 8, -376, 220)
   frame.alphaSlider:SetScript("OnValueChanged", function()
     getglobal(this:GetName() .. "Text"):SetText("Alpha: " .. string.format("%.2f", this:GetValue()))
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if TwAuras.configFrame
+      and not TwAuras.configFrame.__suppressLiveUpdate
+      and TwAuras.configFrame.liveUpdateCheck
+      and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
