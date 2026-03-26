@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.35
+-- TwAuras file version: 0.1.36
 -- Trigger evaluation helpers for aura scans, resource checks, and combat log timers.
 -- Trigger comparisons stay local to this file because trigger handlers use them constantly.
 local function CompareValue(value, op, threshold)
@@ -554,7 +554,7 @@ local function StartInternalCooldown(self, runtimeKey, duration, icon, label, so
   if timer.expirationTime and timer.expirationTime > GetTime() then
     return timer
   end
-  self:StartAuraTimer(runtimeKey, duration or 0, icon, label, source)
+  self:StartAuraTimer(runtimeKey, duration or 0, icon, label, source, self.runtime.internalCooldownAura)
   timer = self:GetAuraRuntime(runtimeKey)
   return timer
 end
@@ -1260,7 +1260,7 @@ function TwAuras:ApplyEstimatedDuration(aura, state)
     return state
   end
   if not state.active then
-    self:StopAuraTimer(self:GetTriggerRuntimeKey(aura, aura.trigger))
+    self:StopAuraTimer(self:GetTriggerRuntimeKey(aura, aura.trigger), aura)
     return state
   end
   if (aura.trigger.duration or 0) <= 0 or state.expirationTime then
@@ -1270,7 +1270,7 @@ function TwAuras:ApplyEstimatedDuration(aura, state)
   local runtimeKey = self:GetTriggerRuntimeKey(aura, aura.trigger)
   local timer = self:GetAuraRuntime(runtimeKey)
   if not timer.expirationTime or timer.icon ~= state.icon then
-    self:StartAuraTimer(runtimeKey, aura.trigger.duration, state.icon, state.name or aura.name)
+    self:StartAuraTimer(runtimeKey, aura.trigger.duration, state.icon, state.name or aura.name, nil, aura)
     timer = self:GetAuraRuntime(runtimeKey)
   end
 
@@ -1570,7 +1570,7 @@ local function CombatLogTriggerHandler(self, aura)
   local timer = self:GetAuraRuntime(runtimeKey)
   local active = timer.expirationTime and timer.expirationTime > GetTime()
   if not active then
-    self:StopAuraTimer(runtimeKey)
+    self:StopAuraTimer(runtimeKey, aura)
     return {
       active = false,
       label = timer.label or aura.name,
@@ -1593,7 +1593,7 @@ local function SpellCastTriggerHandler(self, aura, trigger)
   local timer = self:GetAuraRuntime(runtimeKey)
   local active = timer.expirationTime and timer.expirationTime > GetTime()
   if not active then
-    self:StopAuraTimer(runtimeKey)
+    self:StopAuraTimer(runtimeKey, aura)
     return {
       active = false,
       label = timer.label or trigger.spellName or aura.name,
@@ -2136,6 +2136,9 @@ function TwAuras:RecordCombatLog(chatEvent, message)
   for i = 1, table.getn(auras) do
     local aura = auras[i]
     local shouldRefreshUnitFrames = false
+    if self:IsAuraDebugEnabled(aura, "combatlog") then
+      self:DebugLog(aura, "combatlog", tostring(chatEvent or "CHAT_MSG") .. " -> " .. message)
+    end
     local j
     for j = 1, table.getn(aura.triggers or {}) do
       local trigger = aura.triggers[j]
@@ -2148,12 +2151,16 @@ function TwAuras:RecordCombatLog(chatEvent, message)
         local eventMatches = wantedEvent == "ANY" or wantedEvent == string.upper(chatEvent or "")
         local patternMatches = pattern ~= "" and string.find(string.lower(message), string.lower(pattern), 1, true)
         if eventMatches and patternMatches then
+          if self:IsAuraDebugEnabled(aura, "combatlog") then
+            self:DebugLog(aura, "combatlog", "matched combat log trigger " .. tostring(j) .. " with pattern \"" .. pattern .. "\"")
+          end
           self:StartAuraTimer(
             self:GetTriggerRuntimeKey(aura, trigger),
             trigger.duration or 0,
             aura.display.iconPath,
             aura.name,
-            GetCombatLogSourceText(message)
+            GetCombatLogSourceText(message),
+            aura
           )
           self:RefreshAura(aura)
         end
@@ -2163,6 +2170,10 @@ function TwAuras:RecordCombatLog(chatEvent, message)
         if (detectMode == "combatlog" or detectMode == "either")
           and pattern ~= ""
           and string.find(string.lower(message), string.lower(pattern), 1, true) then
+          if self:IsAuraDebugEnabled(aura, "combatlog") then
+            self:DebugLog(aura, "combatlog", "matched internal cooldown trigger " .. tostring(j) .. " with pattern \"" .. pattern .. "\"")
+          end
+          self.runtime.internalCooldownAura = aura
           StartInternalCooldown(
             self,
             self:GetTriggerRuntimeKey(aura, trigger),
@@ -2171,6 +2182,7 @@ function TwAuras:RecordCombatLog(chatEvent, message)
             trigger.procName or aura.name,
             GetCombatLogSourceText(message)
           )
+          self.runtime.internalCooldownAura = nil
           self:RefreshAura(aura)
         end
       elseif trigger and trigger.type == "spellcast" then
@@ -2197,18 +2209,25 @@ function TwAuras:RecordCombatLog(chatEvent, message)
         end
 
         if lowerSpell ~= "" and sourceMatches and phaseMatches and string.find(lowerMessage, lowerSpell, 1, true) ~= nil then
+          if self:IsAuraDebugEnabled(aura, "combatlog") then
+            self:DebugLog(aura, "combatlog", "matched spellcast trigger " .. tostring(j) .. " for " .. trigger.spellName)
+          end
           self:StartAuraTimer(
             self:GetTriggerRuntimeKey(aura, trigger),
             trigger.duration or 2,
             aura.display.iconPath,
             trigger.spellName,
-            GetCombatLogSourceText(message)
+            GetCombatLogSourceText(message),
+            aura
           )
           self:RefreshAura(aura)
         end
       end
     end
     if shouldRefreshUnitFrames then
+      if self:IsAuraDebugEnabled(aura, "unitframes") then
+        self:DebugLog(aura, "unitframes", "combat log requested unit frame refresh")
+      end
       self:RefreshAura(aura)
     end
   end

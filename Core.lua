@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.43
+-- TwAuras file version: 0.1.44
 -- Shared table helpers keep saved variables compatible as defaults evolve.
 -- Defaults are copied recursively so adding new saved fields never wipes a user's profile.
 local function CopyDefaults(src, dst)
@@ -336,6 +336,9 @@ function TwAuras:CreateDefaultDebugOptions()
     trigger = false,
     conditions = false,
     load = false,
+    combatlog = false,
+    timer = false,
+    unitframes = false,
   }
 end
 
@@ -1240,6 +1243,9 @@ function TwAuras:BuildUnitFrameStates(aura)
         firstActive = normalized
       end
     end
+  end
+  if self:IsAuraDebugEnabled(aura, "unitframes") then
+    self:DebugLog(aura, "unitframes", "built " .. tostring(table.getn(states)) .. " active unit frame state(s)")
   end
   return states, firstActive or { active = false }
 end
@@ -2199,18 +2205,30 @@ function TwAuras:GetAuraRuntime(id)
 end
 
 -- Aura timers provide a consistent timer source for estimated durations and combat-log states.
-function TwAuras:StartAuraTimer(id, duration, icon, label, source)
+function TwAuras:StartAuraTimer(id, duration, icon, label, source, aura)
   local timer = self:GetAuraRuntime(id)
   local now = GetTime()
+  if aura then
+    self.runtime.timerOwners = self.runtime.timerOwners or {}
+    self.runtime.timerOwners[id] = aura
+  end
   timer.startTime = now
   timer.duration = tonumber(duration) or 0
   timer.expirationTime = now + timer.duration
   timer.icon = icon
   timer.label = label
   timer.source = source or ""
+  aura = aura or (self.runtime.timerOwners and self.runtime.timerOwners[id]) or nil
+  if self:IsAuraDebugEnabled(aura, "timer") then
+    self:DebugLog(aura, "timer", "started \"" .. tostring(label or id) .. "\" for " .. tostring(timer.duration or 0) .. "s")
+  end
 end
 
-function TwAuras:StopAuraTimer(id)
+function TwAuras:StopAuraTimer(id, aura)
+  aura = aura or (self.runtime.timerOwners and self.runtime.timerOwners[id]) or nil
+  if self:IsAuraDebugEnabled(aura, "timer") then
+    self:DebugLog(aura, "timer", "stopped \"" .. tostring((self.runtime.timers[id] and self.runtime.timers[id].label) or id) .. "\"")
+  end
   self.runtime.timers[id] = {}
 end
 

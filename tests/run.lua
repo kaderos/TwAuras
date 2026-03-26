@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.38
+-- TwAuras file version: 0.1.39
 -- The harness is intentionally tiny: load the addon under a stubbed WoW API and assert behavior.
 local function dirname(path)
   local normalized = string.gsub(path, "\\", "/")
@@ -1509,6 +1509,138 @@ add_test("show config tab restores a minimized config first", function()
   assert_equal(TwAuras.configFrame.currentTab, "trigger", "tab switch should still record the selected tab")
 end)
 
+add_test("close hides config immediately when live update is enabled", function()
+  fresh_runtime()
+  local hidden = false
+  TwAuras.configFrame = {
+    Hide = function() hidden = true end,
+    liveUpdateCheck = {
+      GetChecked = function()
+        return true
+      end,
+    },
+  }
+
+  TwAuras:RequestCloseConfigWindow()
+  assert_true(hidden, "close should hide the config immediately when live update is enabled")
+  assert_true(TwAuras.unsavedCloseFrame == nil, "no unsaved prompt should be built when live update is enabled")
+end)
+
+add_test("close shows unsaved prompt when live update is disabled", function()
+  fresh_runtime()
+  local hidden = false
+  local shown = false
+  local originalGetSelectedAura = TwAuras.GetSelectedAura
+  local originalBuildUnsavedCloseFrame = TwAuras.BuildUnsavedCloseFrame
+  TwAuras.GetSelectedAura = function()
+    return { id = 1, name = "Test Aura" }
+  end
+  TwAuras.BuildUnsavedCloseFrame = function(self)
+    self.unsavedCloseFrame = {
+      Show = function() shown = true end,
+      Hide = function() end,
+    }
+  end
+  TwAuras.configFrame = {
+    Hide = function() hidden = true end,
+    liveUpdateCheck = {
+      GetChecked = function()
+        return false
+      end,
+    },
+  }
+
+  TwAuras:RequestCloseConfigWindow()
+  TwAuras.GetSelectedAura = originalGetSelectedAura
+  TwAuras.BuildUnsavedCloseFrame = originalBuildUnsavedCloseFrame
+
+  assert_true(shown, "close should show the unsaved prompt when live update is disabled")
+  assert_true(not hidden, "close should not hide the config immediately when prompting")
+end)
+
+add_test("unsaved prompt apply saves and then closes", function()
+  fresh_runtime()
+  local applied = false
+  local configHidden = false
+  local promptHidden = false
+  TwAuras.configFrame = {
+    Hide = function() configHidden = true end,
+  }
+  TwAuras.unsavedCloseFrame = {
+    Hide = function() promptHidden = true end,
+  }
+  local originalApply = TwAuras.ApplyEditorToSelectedAura
+  TwAuras.ApplyEditorToSelectedAura = function(_, isLive)
+    applied = (isLive == false)
+  end
+
+  local originalBuildUnsavedCloseFrame = TwAuras.BuildUnsavedCloseFrame
+  TwAuras.BuildUnsavedCloseFrame = function(self)
+    self.unsavedCloseFrame = TwAuras.unsavedCloseFrame
+    self.unsavedCloseFrame.applyButton = {
+      scripts = {
+        OnClick = function()
+          TwAuras:ApplyEditorToSelectedAura(false)
+          TwAuras.unsavedCloseFrame:Hide()
+          if TwAuras.configFrame then
+            TwAuras.configFrame:Hide()
+          end
+        end,
+      },
+    }
+  end
+
+  TwAuras:BuildUnsavedCloseFrame()
+  TwAuras.unsavedCloseFrame.applyButton.scripts.OnClick()
+  TwAuras.ApplyEditorToSelectedAura = originalApply
+  TwAuras.BuildUnsavedCloseFrame = originalBuildUnsavedCloseFrame
+
+  assert_true(applied, "apply should save staged editor changes before closing")
+  assert_true(promptHidden, "apply should hide the unsaved prompt")
+  assert_true(configHidden, "apply should then close the config")
+end)
+
+add_test("unsaved prompt discard closes without applying", function()
+  fresh_runtime()
+  local applied = false
+  local configHidden = false
+  local promptHidden = false
+  TwAuras.configFrame = {
+    Hide = function() configHidden = true end,
+  }
+  TwAuras.unsavedCloseFrame = {
+    Hide = function() promptHidden = true end,
+  }
+  local originalApply = TwAuras.ApplyEditorToSelectedAura
+  TwAuras.ApplyEditorToSelectedAura = function()
+    applied = true
+  end
+
+  local originalBuildUnsavedCloseFrame = TwAuras.BuildUnsavedCloseFrame
+  TwAuras.BuildUnsavedCloseFrame = function(self)
+    self.unsavedCloseFrame = TwAuras.unsavedCloseFrame
+    self.unsavedCloseFrame.discardButton = {
+      scripts = {
+        OnClick = function()
+          TwAuras.unsavedCloseFrame:Hide()
+          if TwAuras.configFrame then
+            TwAuras.configFrame:Hide()
+          end
+        end,
+      },
+    }
+  end
+
+  TwAuras:BuildUnsavedCloseFrame()
+  TwAuras.unsavedCloseFrame.discardButton.scripts.OnClick()
+  TwAuras.ApplyEditorToSelectedAura = originalApply
+  TwAuras.BuildUnsavedCloseFrame = originalBuildUnsavedCloseFrame
+
+  assert_true(not applied, "discard should not apply staged editor changes")
+  assert_true(promptHidden, "discard should hide the unsaved prompt")
+  assert_true(configHidden, "discard should close the config")
+end)
+
 add_test("aura summary describes triggers and load concisely", function()
   local aura = {
     id = 300,
@@ -2702,6 +2834,342 @@ add_test("trigger debug reports handler errors once and returns inactive state",
   local messages = stub.get_messages()
   assert_true(not state.active, "failing trigger handlers should resolve inactive")
   assert_true(string.find(messages[1] or "", "boom", 1, true) ~= nil, "trigger debug should surface handler errors")
+end)
+
+add_test("trigger handler errors stay quiet when trigger debug is disabled", function()
+  fresh_runtime()
+  stub.set_time(21)
+  TwAuras:RegisterTriggerType("explode_silent_test", {
+    displayName = "Explode Silent Test",
+    handler = function()
+      error("silent boom")
+    end,
+    fields = {},
+  })
+
+  local aura = {
+    id = 905,
+    name = "Quiet Exploder",
+    debug = { trigger = false },
+  }
+  local state = TwAuras:EvaluateSingleTrigger(aura, { type = "explode_silent_test" })
+  assert_true(not state.active, "failing trigger handlers should still resolve inactive")
+  assert_equal(table.getn(stub.get_messages()), 0, "trigger errors should not print when trigger debug is disabled")
+end)
+
+add_test("condition debug reports evaluation errors when enabled", function()
+  fresh_runtime()
+  stub.set_time(22)
+  local original = TwAuras.EvaluateCondition
+  TwAuras.EvaluateCondition = function()
+    error("condition boom")
+  end
+
+  local aura = {
+    id = 906,
+    name = "Condition Boom",
+    debug = { conditions = true },
+    display = { alpha = 1 },
+    conditions = {
+      { enabled = true, check = "active", operator = "=", threshold = 1 },
+    },
+  }
+  local state = TwAuras:ResolveConditionalState(aura, { active = true })
+  TwAuras.EvaluateCondition = original
+
+  assert_true(state.display ~= nil, "condition resolution should still return a display table")
+  assert_true(string.find(stub.get_messages()[1] or "", "condition boom", 1, true) ~= nil, "condition debug should surface evaluation errors")
+end)
+
+add_test("condition evaluation errors stay quiet when conditions debug is disabled", function()
+  fresh_runtime()
+  stub.set_time(23)
+  local original = TwAuras.EvaluateCondition
+  TwAuras.EvaluateCondition = function()
+    error("quiet condition boom")
+  end
+
+  local aura = {
+    id = 907,
+    name = "Quiet Condition Boom",
+    debug = { conditions = false },
+    display = { alpha = 1 },
+    conditions = {
+      { enabled = true, check = "active", operator = "=", threshold = 1 },
+    },
+  }
+  TwAuras:ResolveConditionalState(aura, { active = true })
+  TwAuras.EvaluateCondition = original
+
+  assert_equal(table.getn(stub.get_messages()), 0, "condition errors should not print when conditions debug is disabled")
+end)
+
+add_test("display debug reports apply errors when enabled", function()
+  fresh_runtime()
+  stub.set_time(24)
+  local aura = {
+    id = 908,
+    name = "Display Boom",
+    enabled = true,
+    regionType = "icon",
+    triggerMode = "all",
+    debug = { display = true },
+    display = { desaturateInactive = false },
+    load = {},
+    triggers = {
+      { type = "always" },
+    },
+    conditions = {},
+  }
+  local hidden = false
+  TwAuras.regions[aura.id] = {
+    ApplyState = function()
+      error("display boom")
+    end,
+    Show = function() end,
+    Hide = function() hidden = true end,
+  }
+
+  TwAuras:RefreshAura(aura)
+  assert_true(hidden, "display failures should hide the region")
+  assert_true(string.find(stub.get_messages()[1] or "", "display boom", 1, true) ~= nil, "display debug should surface apply errors")
+end)
+
+add_test("display apply errors stay quiet when display debug is disabled", function()
+  fresh_runtime()
+  stub.set_time(25)
+  local aura = {
+    id = 909,
+    name = "Quiet Display Boom",
+    enabled = true,
+    regionType = "icon",
+    triggerMode = "all",
+    debug = { display = false },
+    display = { desaturateInactive = false },
+    load = {},
+    triggers = {
+      { type = "always" },
+    },
+    conditions = {},
+  }
+  TwAuras.regions[aura.id] = {
+    ApplyState = function()
+      error("quiet display boom")
+    end,
+    Show = function() end,
+    Hide = function() end,
+  }
+
+  TwAuras:RefreshAura(aura)
+  assert_equal(table.getn(stub.get_messages()), 0, "display errors should not print when display debug is disabled")
+end)
+
+add_test("load debug reports failure reasons when enabled", function()
+  fresh_runtime()
+  stub.set_time(26)
+  stub.set_unit("target", { exists = false })
+  local aura = {
+    id = 910,
+    name = "Load Fail",
+    enabled = true,
+    regionType = "icon",
+    triggerMode = "all",
+    debug = { load = true },
+    display = { desaturateInactive = false },
+    load = { requireTarget = true },
+    triggers = {
+      { type = "always" },
+    },
+    conditions = {},
+  }
+  TwAuras.regions[aura.id] = {
+    Hide = function() end,
+  }
+
+  TwAuras:RefreshAura(aura)
+  assert_true(string.find(stub.get_messages()[1] or "", "target missing", 1, true) ~= nil, "load debug should report failure reasons")
+end)
+
+add_test("load passes stay quiet when load debug is disabled", function()
+  fresh_runtime()
+  stub.set_time(27)
+  local aura = {
+    id = 911,
+    name = "Load Quiet",
+    enabled = true,
+    regionType = "icon",
+    triggerMode = "all",
+    debug = { load = false },
+    display = { desaturateInactive = false },
+    load = {},
+    triggers = {
+      { type = "always" },
+    },
+    conditions = {},
+  }
+  TwAuras.regions[aura.id] = {
+    ApplyState = function() end,
+    Show = function() end,
+    Hide = function() end,
+  }
+
+  TwAuras:RefreshAura(aura)
+  assert_equal(table.getn(stub.get_messages()), 0, "load passes should not print when load debug is disabled")
+end)
+
+add_test("timer debug logs start and stop through the shared throttle", function()
+  fresh_runtime()
+  stub.set_time(30)
+  local aura = {
+    id = 902,
+    name = "Timer Aura",
+    debug = { timer = true },
+  }
+
+  TwAuras:StartAuraTimer("timer_test", 5, nil, "Test Timer", "", aura)
+  stub.advance_time(11)
+  TwAuras:StopAuraTimer("timer_test", aura)
+
+  local messages = stub.get_messages()
+  assert_equal(table.getn(messages), 2, "timer debug should log both start and stop after the throttle window")
+  assert_true(string.find(messages[1] or "", "started", 1, true) ~= nil, "timer start should be logged")
+  assert_true(string.find(messages[2] or "", "stopped", 1, true) ~= nil, "timer stop should be logged")
+end)
+
+add_test("timer debug stays quiet when disabled", function()
+  fresh_runtime()
+  stub.set_time(31)
+  local aura = {
+    id = 912,
+    name = "Quiet Timer Aura",
+    debug = { timer = false },
+  }
+
+  TwAuras:StartAuraTimer("timer_quiet_test", 5, nil, "Quiet Timer", "", aura)
+  stub.advance_time(11)
+  TwAuras:StopAuraTimer("timer_quiet_test", aura)
+  assert_equal(table.getn(stub.get_messages()), 0, "timer debug should stay quiet when disabled")
+end)
+
+add_test("combat log debug reports matched combat log triggers", function()
+  fresh_runtime()
+  stub.set_time(40)
+  local aura = {
+    id = 903,
+    name = "Combat Log Aura",
+    regionType = "icon",
+    triggerMode = "all",
+    debug = { combatlog = true },
+    display = { iconPath = "" },
+    load = {},
+    triggers = {
+      {
+        type = "combatlog",
+        combatLogEvent = "ANY",
+        combatLogPattern = "shadow flame",
+        duration = 5,
+      },
+    },
+  }
+  TwAuras.db = TwAuras.db or {}
+  TwAuras.db.auraStore = { version = 1, order = { aura.id }, items = { [tostring(aura.id)] = aura } }
+  TwAuras.regions[aura.id] = {
+    ApplyState = function() end,
+    Show = function() end,
+    Hide = function() end,
+  }
+
+  TwAuras:RecordCombatLog("CHAT_MSG_SPELL_CREATURE_VS_PARTY_DAMAGE", "Onyxia begins to cast Shadow Flame.")
+  local message = stub.get_messages()[1] or ""
+  assert_true(string.find(message, "combat log trigger", 1, true) ~= nil or string.find(message, "CHAT_MSG", 1, true) ~= nil, "combat log debug should report the incoming line or its trigger match")
+end)
+
+add_test("combat log debug stays quiet when disabled", function()
+  fresh_runtime()
+  stub.set_time(41)
+  local aura = {
+    id = 913,
+    name = "Quiet Combat Log Aura",
+    regionType = "icon",
+    triggerMode = "all",
+    debug = { combatlog = false },
+    display = { iconPath = "" },
+    load = {},
+    triggers = {
+      {
+        type = "combatlog",
+        combatLogEvent = "ANY",
+        combatLogPattern = "shadow flame",
+        duration = 5,
+      },
+    },
+  }
+  TwAuras.db = TwAuras.db or {}
+  TwAuras.db.auraStore = { version = 1, order = { aura.id }, items = { [tostring(aura.id)] = aura } }
+  TwAuras.regions[aura.id] = {
+    ApplyState = function() end,
+    Show = function() end,
+    Hide = function() end,
+  }
+
+  TwAuras:RecordCombatLog("CHAT_MSG_SPELL_CREATURE_VS_PARTY_DAMAGE", "Onyxia begins to cast Shadow Flame.")
+  assert_equal(table.getn(stub.get_messages()), 0, "combat log debug should stay quiet when disabled")
+end)
+
+add_test("unit frame debug reports built active states", function()
+  fresh_runtime()
+  stub.set_time(50)
+  stub.set_group_state({ party = 2 })
+  stub.set_unit("party1", { name = "Party One", exists = true })
+  stub.set_unit("party2", { name = "Party Two", exists = true })
+  stub.set_unit_buffs("party1", {
+    { name = "Rejuvenation", texture = "Interface\\Icons\\Spell_Nature_Rejuvenation" },
+  })
+  stub.set_unit_buffs("party2", {})
+
+  local aura = {
+    id = 904,
+    name = "Party Rejuv",
+    regionType = "unitframes",
+    debug = { unitframes = true },
+    display = { frameScope = "party" },
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Rejuvenation", sourceFilter = "any" },
+    },
+    conditions = {},
+  }
+
+  local states = TwAuras:BuildUnitFrameStates(aura)
+  local message = stub.get_messages()[1] or ""
+  assert_equal(table.getn(states), 1, "one party member should have an active unit frame state")
+  assert_true(string.find(message, "built 1 active unit frame state", 1, true) ~= nil, "unit frame debug should report the built state count")
+end)
+
+add_test("unit frame debug stays quiet when disabled", function()
+  fresh_runtime()
+  stub.set_time(51)
+  stub.set_group_state({ party = 2 })
+  stub.set_unit("party1", { name = "Party One", exists = true })
+  stub.set_unit("party2", { name = "Party Two", exists = true })
+  stub.set_unit_buffs("party1", {
+    { name = "Rejuvenation", texture = "Interface\\Icons\\Spell_Nature_Rejuvenation" },
+  })
+  stub.set_unit_buffs("party2", {})
+
+  local aura = {
+    id = 914,
+    name = "Quiet Party Rejuv",
+    regionType = "unitframes",
+    debug = { unitframes = false },
+    display = { frameScope = "party" },
+    triggers = {
+      { type = "buff", unit = "partyunit", auraName = "Rejuvenation", sourceFilter = "any" },
+    },
+    conditions = {},
+  }
+
+  TwAuras:BuildUnitFrameStates(aura)
+  assert_equal(table.getn(stub.get_messages()), 0, "unit frame debug should stay quiet when disabled")
 end)
 
 local passed = 0

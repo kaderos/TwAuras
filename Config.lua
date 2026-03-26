@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.42
+-- TwAuras file version: 0.1.49
 -- Config.lua owns editor-only concerns: aura CRUD, dynamic trigger lists, and descriptor-driven widgets.
 -- Lowercasing editor strings in one place keeps select and free-text comparisons consistent.
 local function SafeLower(value)
@@ -519,6 +519,118 @@ function TwAuras:DeleteSelectedAura()
   self.db.selectedConditionIndex = 1
   self:RefreshAll()
   self:RefreshConfigUI()
+end
+
+-- Destructive actions route through a small confirmation popup so saved auras are not removed
+-- accidentally from one stray click in the left list footer.
+function TwAuras:BuildDeleteConfirmFrame()
+  if self.deleteConfirmFrame then
+    return
+  end
+
+  local frame = CreateFrame("Frame", "TwAurasDeleteConfirmFrame", UIParent)
+  frame:SetWidth(360)
+  frame:SetHeight(150)
+  frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  frame:SetBackdrop({
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true,
+    tileSize = 32,
+    edgeSize = 32,
+    insets = { left = 11, right = 12, top = 12, bottom = 11 }
+  })
+  frame:Hide()
+
+  frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  frame.title:SetPoint("TOP", frame, "TOP", 0, -16)
+  frame.title:SetText("Delete Aura")
+
+  frame.help = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  frame.help:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -44)
+  frame.help:SetWidth(324)
+  frame.help:SetJustifyH("LEFT")
+  frame.help:SetText("This deletion is permanent. Are you sure you want to delete the selected aura?")
+
+  frame.deleteButton = MakeButton(frame, "Delete", 90, 22, 86, -106, function()
+    TwAuras:DeleteSelectedAura()
+    TwAuras.deleteConfirmFrame:Hide()
+  end)
+  frame.cancelButton = MakeButton(frame, "Cancel", 90, 22, 186, -106, function()
+    TwAuras.deleteConfirmFrame:Hide()
+  end)
+
+  self.deleteConfirmFrame = frame
+end
+
+function TwAuras:OpenDeleteConfirm()
+  local aura = self:GetSelectedAura()
+  if not aura then
+    return
+  end
+  self:BuildDeleteConfirmFrame()
+  self.deleteConfirmFrame:Show()
+end
+
+-- When live update is disabled, closing the config can discard staged widget edits. This prompt
+-- gives users one last chance to apply or discard those pending changes intentionally.
+function TwAuras:BuildUnsavedCloseFrame()
+  if self.unsavedCloseFrame then
+    return
+  end
+
+  local frame = CreateFrame("Frame", "TwAurasUnsavedCloseFrame", UIParent)
+  frame:SetWidth(360)
+  frame:SetHeight(150)
+  frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  frame:SetBackdrop({
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true,
+    tileSize = 32,
+    edgeSize = 32,
+    insets = { left = 11, right = 12, top = 12, bottom = 11 }
+  })
+  frame:Hide()
+
+  frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  frame.title:SetPoint("TOP", frame, "TOP", 0, -16)
+  frame.title:SetText("Unsaved Changes")
+
+  frame.help = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  frame.help:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -44)
+  frame.help:SetWidth(324)
+  frame.help:SetJustifyH("LEFT")
+  frame.help:SetText("You have unsaved changes:")
+
+  frame.applyButton = MakeButton(frame, "Apply", 90, 22, 86, -106, function()
+    TwAuras:ApplyEditorToSelectedAura(false)
+    TwAuras.unsavedCloseFrame:Hide()
+    if TwAuras.configFrame then
+      TwAuras.configFrame:Hide()
+    end
+  end)
+  frame.discardButton = MakeButton(frame, "Discard", 90, 22, 186, -106, function()
+    TwAuras.unsavedCloseFrame:Hide()
+    if TwAuras.configFrame then
+      TwAuras.configFrame:Hide()
+    end
+  end)
+
+  self.unsavedCloseFrame = frame
+end
+
+function TwAuras:RequestCloseConfigWindow()
+  local frame = self.configFrame
+  if not frame then
+    return
+  end
+  if frame.liveUpdateCheck and not frame.liveUpdateCheck:GetChecked() and self:GetSelectedAura() then
+    self:BuildUnsavedCloseFrame()
+    self.unsavedCloseFrame:Show()
+    return
+  end
+  frame:Hide()
 end
 
 -- Region rebuilds are used after display-type changes so stale frame types never linger.
@@ -1428,7 +1540,7 @@ function TwAuras:RefreshAuraList()
       row.__auraId = aura.id
       row.previewCheck.__auraId = aura.id
       row.previewCheck:SetChecked(self:IsAuraPreviewing(aura.id) and true or false)
-      row.text:SetText(aura.name .. " - " .. self:GetAuraSummary(aura, 96))
+      row.text:SetText(aura.name)
       if iconPath and iconPath ~= "" then
         row.icon:SetTexture(iconPath)
         row.icon:Show()
@@ -1467,6 +1579,22 @@ function TwAuras:RefreshObjectSummary()
   end
   if self.configFrame.objectSummarySwatch and self.configFrame.objectSummarySwatch.SetBackdropColor then
     self.configFrame.objectSummarySwatch:SetBackdropColor(r, g, b, 1)
+  end
+end
+
+-- The Apply button is only actionable when live update is off, so its enabled state is derived
+-- from the checkbox instead of being managed ad hoc across many widget callbacks.
+function TwAuras:RefreshLiveUpdateUI()
+  local frame = self.configFrame
+  local liveEnabled
+  if not frame or not frame.liveUpdateCheck or not frame.applyButton then
+    return
+  end
+  liveEnabled = frame.liveUpdateCheck:GetChecked() and true or false
+  if liveEnabled then
+    frame.applyButton:Disable()
+  else
+    frame.applyButton:Enable()
   end
 end
 
@@ -1623,6 +1751,9 @@ function TwAuras:RefreshEditorFields()
   frame.triggerDebugCheck:SetChecked(aura.debug and aura.debug.trigger and true or false)
   frame.conditionsDebugCheck:SetChecked(aura.debug and aura.debug.conditions and true or false)
   frame.loadDebugCheck:SetChecked(aura.debug and aura.debug.load and true or false)
+  frame.combatLogDebugCheck:SetChecked(aura.debug and aura.debug.combatlog and true or false)
+  frame.timerDebugCheck:SetChecked(aura.debug and aura.debug.timer and true or false)
+  frame.unitFramesDebugCheck:SetChecked(aura.debug and aura.debug.unitframes and true or false)
   frame.inCombatCheck:SetChecked(aura.load and aura.load.inCombat and true or false)
   frame.requireTargetCheck:SetChecked(aura.load and aura.load.requireTarget and true or false)
   frame.allowWorldCheck:SetChecked(aura.load and aura.load.allowWorld ~= false and true or false)
@@ -1769,6 +1900,9 @@ function TwAuras:ApplyEditorToSelectedAura(isLive)
   aura.debug.trigger = frame.triggerDebugCheck:GetChecked() and true or false
   aura.debug.conditions = frame.conditionsDebugCheck:GetChecked() and true or false
   aura.debug.load = frame.loadDebugCheck:GetChecked() and true or false
+  aura.debug.combatlog = frame.combatLogDebugCheck:GetChecked() and true or false
+  aura.debug.timer = frame.timerDebugCheck:GetChecked() and true or false
+  aura.debug.unitframes = frame.unitFramesDebugCheck:GetChecked() and true or false
   aura.load.inCombat = frame.inCombatCheck:GetChecked() and true or false
   aura.load.requireTarget = frame.requireTargetCheck:GetChecked() and true or false
   aura.load.allowWorld = frame.allowWorldCheck:GetChecked() and true or false
@@ -1825,13 +1959,13 @@ function TwAuras:BuildConfigFrame()
   frame:Hide()
 
   frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  frame.title:SetPoint("TOP", frame, "TOP", 0, -16)
+  frame.title:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -10)
   frame.title:SetText("TwAuras Config")
 
   frame.leftPanel = CreateFrame("Frame", nil, frame)
   frame.leftPanel:SetWidth(226)
-  frame.leftPanel:SetHeight(540)
-  frame.leftPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -42)
+  frame.leftPanel:SetHeight(552)
+  frame.leftPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -30)
   local leftBackground = frame.leftPanel:CreateTexture(nil, "BACKGROUND")
   leftBackground:SetAllPoints(frame.leftPanel)
   leftBackground:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
@@ -1842,18 +1976,18 @@ function TwAuras:BuildConfigFrame()
   frame.wizardButton = MakeButton(frame.leftPanel, "Wizard", 72, 22, 178, -4, function() TwAuras:OpenWizard() end)
   frame.auraListPanel = CreateFrame("Frame", nil, frame.leftPanel)
   frame.auraListPanel:SetWidth(206)
-  frame.auraListPanel:SetHeight(450)
+  frame.auraListPanel:SetHeight(462)
   frame.auraListPanel:SetPoint("TOPLEFT", frame.leftPanel, "TOPLEFT", 6, -32)
   frame.auraListScroll = CreateFrame("ScrollFrame", "TwAurasAuraListScroll", frame.auraListPanel, "UIPanelScrollFrameTemplate")
   frame.auraListScroll:SetWidth(204)
-  frame.auraListScroll:SetHeight(450)
+  frame.auraListScroll:SetHeight(462)
   frame.auraListScroll:SetPoint("TOPLEFT", frame.auraListPanel, "TOPLEFT", 0, 0)
   frame.auraListContent = CreateFrame("Frame", nil, frame.auraListScroll)
   frame.auraListContent:SetWidth(186)
   frame.auraListContent:SetHeight(1)
   frame.auraListScroll:SetScrollChild(frame.auraListContent)
   frame.auraRows = self:BuildAuraListRows(frame.auraListContent)
-  frame.deleteButton = MakeButton(frame.leftPanel, "Delete", 76, 22, 6, -490, function() TwAuras:DeleteSelectedAura() end)
+  frame.deleteButton = MakeButton(frame.leftPanel, "Delete", 76, 22, 6, -502, function() TwAuras:OpenDeleteConfirm() end)
   frame.objectSummarySwatch = CreateFrame("Frame", nil, frame.leftPanel)
   frame.objectSummarySwatch:SetWidth(12)
   frame.objectSummarySwatch:SetHeight(12)
@@ -1881,8 +2015,8 @@ function TwAuras:BuildConfigFrame()
 
   frame.rightPanel = CreateFrame("Frame", nil, frame)
   frame.rightPanel:SetWidth(680)
-  frame.rightPanel:SetHeight(540)
-  frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 262, -42)
+  frame.rightPanel:SetHeight(552)
+  frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 262, -30)
   local rightBackground = frame.rightPanel:CreateTexture(nil, "BACKGROUND")
   rightBackground:SetAllPoints(frame.rightPanel)
   rightBackground:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
@@ -1899,26 +2033,34 @@ function TwAuras:BuildConfigFrame()
 
   frame.tabButtons = {}
   local tabNames = {"Display", "Trigger", "Conditions", "Load"}
+  local totalTabWidth = (table.getn(tabNames) * 102) + ((table.getn(tabNames) - 1) * 4)
+  local tabStartX = math.floor((960 - totalTabWidth - 46 - 4) / 2)
   local i
   for i = 1, table.getn(tabNames) do
-    local button = CreateFrame("Button", nil, frame.rightPanel, "UIPanelButtonTemplate")
+    local button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     button:SetWidth(102)
     button:SetHeight(20)
-    button:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 8 + ((i - 1) * 106), -48)
+    button:SetPoint("TOPLEFT", frame, "TOPLEFT", tabStartX + ((i - 1) * 106), -8)
     button:SetText(tabNames[i])
     button.__tab = SafeLower(tabNames[i])
     button:SetScript("OnClick", function() TwAuras:ShowConfigTab(this.__tab) end)
     frame.tabButtons[i] = button
   end
-  frame.minimizeButton = CreateFrame("Button", nil, frame.rightPanel, "UIPanelButtonTemplate")
+  frame.minimizeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   frame.minimizeButton:SetWidth(46)
   frame.minimizeButton:SetHeight(20)
-  frame.minimizeButton:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 8 + (table.getn(tabNames) * 106), -48)
+  frame.minimizeButton:SetPoint("TOPLEFT", frame, "TOPLEFT", tabStartX + totalTabWidth + 4, -8)
   frame.minimizeButton:SetText("[ _ ]")
   frame.minimizeButton:SetScript("OnClick", function()
     TwAuras:ToggleConfigMinimized()
   end)
 
+  frame.tabScrolls = {
+    trigger = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    display = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    conditions = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    load = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
+  }
   frame.tabs = {
     trigger = CreateFrame("Frame", nil, frame.rightPanel),
     display = CreateFrame("Frame", nil, frame.rightPanel),
@@ -1926,15 +2068,27 @@ function TwAuras:BuildConfigFrame()
     load = CreateFrame("Frame", nil, frame.rightPanel),
     position = CreateFrame("Frame", nil, frame.rightPanel),
   }
+  local key, scrollFrame
+  for key, scrollFrame in pairs(frame.tabScrolls) do
+    scrollFrame:SetWidth(654)
+    scrollFrame:SetHeight(470)
+    scrollFrame:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 10, -66)
+    scrollFrame:Hide()
+  end
   local key, panel
   for key, panel in pairs(frame.tabs) do
-    panel:SetWidth(654)
-    panel:SetHeight(440)
-    panel:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 10, -76)
+    panel:SetWidth(636)
+    panel:SetHeight(470)
+    if frame.tabScrolls[key] then
+      frame.tabScrolls[key]:SetScrollChild(panel)
+    else
+      panel:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 10, -66)
+    end
   end
 
   local triggerTab = frame.tabs.trigger
   local regionTypeList = JoinKeys(self:GetAvailableRegionTypes())
+  triggerTab:SetHeight(470)
   MakeLabel(triggerTab, "Name", 8, -8)
   frame.nameBox = MakeEditBox(triggerTab, 180, 20, 108, -4)
   MakeLabel(triggerTab, "Logic", 300, -8)
@@ -1945,6 +2099,8 @@ function TwAuras:BuildConfigFrame()
   end)
   MakeLabel(triggerTab, "all, any, priority", 430, -8)
   frame.triggerDebugCheck = MakeCheck(triggerTab, "TwAurasTriggerDebugCheck", "Debug Trigger", 500, -8)
+  frame.combatLogDebugCheck = MakeCheck(triggerTab, "TwAurasCombatLogDebugCheck", "Combat Log Debug", 500, -36)
+  frame.timerDebugCheck = MakeCheck(triggerTab, "TwAurasTimerDebugCheck", "Timer Debug", 500, -64)
 
   frame.triggerListPanel = CreateFrame("Frame", nil, triggerTab)
   frame.triggerListPanel:SetWidth(170)
@@ -2038,6 +2194,7 @@ function TwAuras:BuildConfigFrame()
   end)
 
   local displayTab = frame.tabs.display
+  displayTab:SetHeight(540)
   MakeLabel(displayTab, "Region Type", 8, -8)
   frame.regionTypeBox = MakeSelect(displayTab, 120, 20, 108, -4, self:GetAvailableRegionTypes(), function()
     if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
@@ -2047,6 +2204,7 @@ function TwAuras:BuildConfigFrame()
   end)
   MakeLabel(displayTab, regionTypeList, 216, -8)
   frame.displayDebugCheck = MakeCheck(displayTab, "TwAurasDisplayDebugCheck", "Debug Display", 500, -8)
+  frame.unitFramesDebugCheck = MakeCheck(displayTab, "TwAurasUnitFramesDebugCheck", "Unit Frame Debug", 500, -36)
   frame.regionDescriptorTitle = displayTab:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   frame.regionDescriptorTitle:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -38)
   frame.regionDescriptorHelp = displayTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -2076,6 +2234,7 @@ function TwAuras:BuildConfigFrame()
   MakeLabel(displayTab, "The fields below are generated from the selected region type.", 250, -346)
 
   local conditionsTab = frame.tabs.conditions
+  conditionsTab:SetHeight(560)
   frame.conditionsDebugCheck = MakeCheck(conditionsTab, "TwAurasConditionsDebugCheck", "Debug Conditions", 500, -8)
   frame.conditionListPanel = CreateFrame("Frame", nil, conditionsTab)
   frame.conditionListPanel:SetWidth(170)
@@ -2197,6 +2356,7 @@ function TwAuras:BuildConfigFrame()
   MakeLabel(conditionsTab, "Use a sound file path or numeric sound id. Start and Stop fire once, Active repeats while the aura stays active.", 200, -466)
 
   local loadTab = frame.tabs.load
+  loadTab:SetHeight(470)
   frame.enabledCheck = CreateFrame("CheckButton", "TwAurasEnabledCheck", loadTab, "UICheckButtonTemplate")
   frame.enabledCheck:SetPoint("TOPLEFT", loadTab, "TOPLEFT", 8, -8)
   getglobal("TwAurasEnabledCheckText"):SetText("Enabled")
@@ -2264,8 +2424,14 @@ function TwAuras:BuildConfigFrame()
   frame.liveUpdateCheck = CreateFrame("CheckButton", "TwAurasLiveUpdateCheck", frame, "UICheckButtonTemplate")
   frame.liveUpdateCheck:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 216, 18)
   getglobal("TwAurasLiveUpdateCheckText"):SetText("Live Update")
+  frame.liveUpdateCheck:SetChecked(true)
+  frame.liveUpdateCheck:SetScript("OnClick", function()
+    TwAuras:RefreshLiveUpdateUI()
+  end)
   frame.applyButton = MakeButton(frame, "Apply", 90, 22, 370, -578, function() TwAuras:ApplyEditorToSelectedAura(false) end)
-  frame.closeButton = MakeButton(frame, "Close", 90, 22, 470, -578, function() frame:Hide() end)
+  frame.closeButton = MakeButton(frame, "Close", 80, 20, 0, 0, function() TwAuras:RequestCloseConfigWindow() end)
+  frame.closeButton:ClearAllPoints()
+  frame.closeButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -18, -6)
   frame.debugButton = MakeButton(frame, "Debug", 90, 22, 570, -578, function() TwAuras:DebugRecentCombatLog() end)
   frame.unlockButton = MakeButton(frame, "Unlock", 70, 22, 670, -578, function() TwAuras:SetUnlocked(true) end)
   frame.lockButton = MakeButton(frame, "Lock", 70, 22, 750, -578, function() TwAuras:SetUnlocked(false) end)
@@ -2273,6 +2439,7 @@ function TwAuras:BuildConfigFrame()
   self.configFrame = frame
   frame.currentTab = "display"
   frame.minimized = false
+  self:RefreshLiveUpdateUI()
   self:ShowConfigTab("display")
 end
 
@@ -2287,7 +2454,17 @@ function TwAuras:ShowConfigTab(tabName)
   self.configFrame.currentTab = tabName
   local key, panel
   for key, panel in pairs(self.configFrame.tabs) do
-    if key == tabName then panel:Show() else panel:Hide() end
+    if self.configFrame.tabScrolls and self.configFrame.tabScrolls[key] then
+      if key == tabName then
+        self.configFrame.tabScrolls[key]:SetVerticalScroll(0)
+        self.configFrame.tabScrolls[key]:Show()
+      else
+        self.configFrame.tabScrolls[key]:Hide()
+      end
+      panel:Show()
+    else
+      if key == tabName then panel:Show() else panel:Hide() end
+    end
   end
 end
 
@@ -2312,7 +2489,7 @@ function TwAuras:SetConfigMinimized(flag)
     if frame.rightPanel then
       frame.rightPanel:SetWidth(452)
       frame.rightPanel:SetHeight(54)
-      frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -14)
+      frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -8)
       frame.rightPanel:EnableMouse(false)
     end
     if frame.leftBackground then
@@ -2326,10 +2503,14 @@ function TwAuras:SetConfigMinimized(flag)
     if frame.summaryText then frame.summaryText:Hide() end
     if frame.liveUpdateCheck then frame.liveUpdateCheck:Hide() end
     if frame.applyButton then frame.applyButton:Hide() end
-    if frame.closeButton then frame.closeButton:Hide() end
     if frame.debugButton then frame.debugButton:Hide() end
     if frame.unlockButton then frame.unlockButton:Hide() end
     if frame.lockButton then frame.lockButton:Hide() end
+    if frame.tabScrolls then
+      for key, panel in pairs(frame.tabScrolls) do
+        panel:Hide()
+      end
+    end
     if frame.tabs then
       for key, panel in pairs(frame.tabs) do
         panel:Hide()
@@ -2345,8 +2526,8 @@ function TwAuras:SetConfigMinimized(flag)
     end
     if frame.rightPanel then
       frame.rightPanel:SetWidth(680)
-      frame.rightPanel:SetHeight(540)
-      frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 262, -42)
+      frame.rightPanel:SetHeight(552)
+      frame.rightPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 262, -30)
       frame.rightPanel:EnableMouse(true)
     end
     if frame.leftBackground then
@@ -2360,10 +2541,14 @@ function TwAuras:SetConfigMinimized(flag)
     if frame.summaryText then frame.summaryText:Show() end
     if frame.liveUpdateCheck then frame.liveUpdateCheck:Show() end
     if frame.applyButton then frame.applyButton:Show() end
-    if frame.closeButton then frame.closeButton:Show() end
     if frame.debugButton then frame.debugButton:Show() end
     if frame.unlockButton then frame.unlockButton:Show() end
     if frame.lockButton then frame.lockButton:Show() end
+    if frame.tabScrolls then
+      for key, panel in pairs(frame.tabScrolls) do
+        panel:Hide()
+      end
+    end
     self:ShowConfigTab(frame.currentTab or "display")
   end
 

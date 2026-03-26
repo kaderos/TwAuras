@@ -1,4 +1,4 @@
--- TwAuras file version: 0.1.26
+-- TwAuras file version: 0.1.27
 -- Addon bootstrap, defaults, and frame event wiring.
 local addonName = "TwAuras"
 
@@ -24,6 +24,7 @@ TwAuras = {
     targetManaEstimates = {},
     auraAudio = {},
     debugLog = {},
+    timerOwners = {},
     energyTick = {},
     manaFiveSecondRule = {},
     lastPlayerComboPoints = 0,
