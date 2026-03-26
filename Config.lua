@@ -8,6 +8,38 @@ local function SafeLower(value)
   return string.lower(value)
 end
 
+local generatedWidgetId = 0
+local function NextWidgetName(prefix)
+  generatedWidgetId = generatedWidgetId + 1
+  return "TwAuras" .. tostring(prefix or "Widget") .. tostring(generatedWidgetId)
+end
+
+-- Keep config and popup windows interactable by forcing them above the main editor stack.
+local function BringFrameToFront(frame, owner, isPopup)
+  local baseLevel = 0
+  local bump = isPopup and 40 or 20
+  local wanted = bump
+  if not frame then
+    return
+  end
+  if owner and owner.GetFrameLevel then
+    baseLevel = owner:GetFrameLevel() or 0
+  end
+  wanted = math.max(baseLevel + bump, 1)
+  if frame.SetToplevel then
+    frame:SetToplevel(true)
+  end
+  if frame.SetFrameStrata then
+    frame:SetFrameStrata(isPopup and "FULLSCREEN_DIALOG" or "DIALOG")
+  end
+  if frame.SetFrameLevel then
+    frame:SetFrameLevel(wanted)
+  end
+  if frame.Raise then
+    frame:Raise()
+  end
+end
+
 -- The config reuses the same hue math as the region runtime so previews match in-game rendering.
 local function HueToRGB(hue)
   local normalized = (tonumber(hue) or 0) / 60
@@ -38,7 +70,7 @@ end
 
 -- Edit boxes stay non-autofocused so opening the config never steals movement keys unexpectedly.
 local function MakeEditBox(parent, width, height, x, y)
-  local eb = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+  local eb = CreateFrame("EditBox", NextWidgetName("EditBox"), parent, "InputBoxTemplate")
   eb:SetAutoFocus(false)
   eb:SetWidth(width)
   eb:SetHeight(height)
@@ -48,7 +80,7 @@ end
 
 -- Buttons all route through one helper so the config layout can be rebuilt with less repetition.
 local function MakeButton(parent, text, width, height, x, y, onClick)
-  local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  local button = CreateFrame("Button", NextWidgetName("Button"), parent, "UIPanelButtonTemplate")
   button:SetWidth(width)
   button:SetHeight(height)
   button:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -59,22 +91,27 @@ end
 
 -- Generic hover help is used for token reminders, field explanations, and other compact hints.
 local function AttachHoverTooltip(widget, tooltipText)
-  if not widget or not tooltipText or tooltipText == "" then
+  if not widget or not widget.SetScript or not tooltipText or tooltipText == "" then
     return
   end
   widget:SetScript("OnEnter", function()
+    if not GameTooltip then
+      return
+    end
     GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
     GameTooltip:SetText(tooltipText, 1, 1, 1, 1, true)
     GameTooltip:Show()
   end)
   widget:SetScript("OnLeave", function()
-    GameTooltip:Hide()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
   end)
 end
 
 -- The object summary tooltip shares the runtime breakdown instead of duplicating its own counts.
 local function AttachObjectSummaryTooltip(widget)
-  if not widget then
+  if not widget or not widget.SetScript then
     return
   end
   widget:SetScript("OnEnter", function()
@@ -127,7 +164,7 @@ end
 
 -- TwAuras uses a lightweight custom select menu instead of Blizzard dropdowns for simpler control.
 local function MakeSelect(parent, width, height, x, y, options, onChanged)
-  local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  local button = CreateFrame("Button", NextWidgetName("Select"), parent, "UIPanelButtonTemplate")
   button:SetWidth(width)
   button:SetHeight(height)
   button:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -155,6 +192,9 @@ end
 
 -- Checkboxes use Blizzard templates but are wrapped here to keep the frame builder compact.
 local function MakeCheck(parent, globalName, text, x, y)
+  if not globalName or globalName == "" then
+    globalName = NextWidgetName("Check")
+  end
   local check = CreateFrame("CheckButton", globalName, parent, "UICheckButtonTemplate")
   check:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
   getglobal(globalName .. "Text"):SetText(text)
@@ -449,6 +489,7 @@ function TwAuras:OpenAuraRowMenu(row)
   menu.__auraId = row.__auraId
   menu:ClearAllPoints()
   menu:SetPoint("TOPLEFT", row, "TOPRIGHT", 2, 0)
+  BringFrameToFront(menu, self.configFrame, true)
   menu:Show()
 end
 
@@ -569,6 +610,7 @@ function TwAuras:OpenDeleteConfirm()
     return
   end
   self:BuildDeleteConfirmFrame()
+  BringFrameToFront(self.deleteConfirmFrame, self.configFrame, true)
   self.deleteConfirmFrame:Show()
 end
 
@@ -627,6 +669,7 @@ function TwAuras:RequestCloseConfigWindow()
   end
   if frame.liveUpdateCheck and not frame.liveUpdateCheck:GetChecked() and self:GetSelectedAura() then
     self:BuildUnsavedCloseFrame()
+    BringFrameToFront(self.unsavedCloseFrame, self.configFrame, true)
     self.unsavedCloseFrame:Show()
     return
   end
@@ -748,7 +791,10 @@ function TwAuras:BuildDescriptorFieldGroup(parent, prefix, fields, startX, start
           local r, g, b = HueToRGB(hue)
           widget.preview:SetBackdropColor(r, g, b, 1)
         end
-        if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+        if TwAuras.configFrame
+          and not TwAuras.configFrame.__suppressLiveUpdate
+          and TwAuras.configFrame.liveUpdateCheck
+          and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
           TwAuras:ApplyEditorToSelectedAura(true)
         end
       end)
@@ -891,6 +937,7 @@ function TwAuras:OpenSelectMenu(control)
     end
   end
 
+  BringFrameToFront(frame, self.configFrame, true)
   frame:Show()
 end
 
@@ -1257,7 +1304,7 @@ function TwAuras:BuildSoundPicker()
   frame.rows = {}
   local i
   for i = 1, table.getn(SOUND_PICKER_SOUNDS) do
-    local button = CreateFrame("Button", nil, frame.scrollChild, "UIPanelButtonTemplate")
+    local button = CreateFrame("Button", NextWidgetName("SoundRowButton"), frame.scrollChild, "UIPanelButtonTemplate")
     button:SetWidth(402)
     button:SetHeight(20)
     button:SetPoint("TOPLEFT", frame.scrollChild, "TOPLEFT", 0, -((i - 1) * 24))
@@ -1376,6 +1423,7 @@ end
 
 function TwAuras:OpenWizard()
   self:BuildWizardFrame()
+  BringFrameToFront(self.wizardFrame, self.configFrame, true)
   self.wizardFrame:Show()
 end
 
@@ -1387,6 +1435,7 @@ function TwAuras:OpenIconPicker()
   end
   self.iconPickerFrame.pageIndex = 1
   self:RefreshIconPickerFilter()
+  BringFrameToFront(self.iconPickerFrame, self.configFrame, true)
   self.iconPickerFrame:Show()
 end
 
@@ -1402,6 +1451,7 @@ function TwAuras:OpenSoundPicker(targetField, label)
   end
   self.soundPickerFrame.pageIndex = 1
   self:RefreshSoundPickerFilter()
+  BringFrameToFront(self.soundPickerFrame, self.configFrame, true)
   self.soundPickerFrame:Show()
 end
 
@@ -1426,7 +1476,7 @@ function TwAuras:EnsureAuraListRows(parent, wanted)
     button.icon:SetWidth(14)
     button.icon:SetHeight(14)
     button.icon:SetPoint("LEFT", button, "LEFT", 4, 0)
-    button.previewCheck = CreateFrame("CheckButton", nil, button, "UICheckButtonTemplate")
+    button.previewCheck = CreateFrame("CheckButton", NextWidgetName("AuraRowPreviewCheck"), button, "UICheckButtonTemplate")
     button.previewCheck:SetWidth(18)
     button.previewCheck:SetHeight(18)
     button.previewCheck:SetPoint("RIGHT", button, "RIGHT", 0, 0)
@@ -1696,8 +1746,10 @@ function TwAuras:RefreshEditorFields()
   if not frame then
     return
   end
+  frame.__suppressLiveUpdate = true
   if not aura then
     frame.editorTitle:SetText("No aura selected")
+    frame.__suppressLiveUpdate = false
     return
   end
 
@@ -1800,6 +1852,7 @@ function TwAuras:RefreshEditorFields()
   frame.soundActiveBox:SetText((aura.soundActions and aura.soundActions.activeSound) or "")
   frame.soundActiveIntervalBox:SetText(tostring((aura.soundActions and aura.soundActions.activeInterval) or 2))
   frame.soundStopBox:SetText((aura.soundActions and aura.soundActions.stopSound) or "")
+  frame.__suppressLiveUpdate = false
 end
 
 -- RefreshConfigUI is the main editor repaint entry point after selection changes or edits.
@@ -1948,6 +2001,8 @@ function TwAuras:BuildConfigFrame()
   frame:SetWidth(960)
   frame:SetHeight(620)
   frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  frame:SetToplevel(true)
+  frame:SetFrameStrata("DIALOG")
   frame:SetBackdrop({
     bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
     edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
@@ -2037,7 +2092,7 @@ function TwAuras:BuildConfigFrame()
   local tabStartX = math.floor((960 - totalTabWidth - 46 - 4) / 2)
   local i
   for i = 1, table.getn(tabNames) do
-    local button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    local button = CreateFrame("Button", NextWidgetName("ConfigTabButton"), frame, "UIPanelButtonTemplate")
     button:SetWidth(102)
     button:SetHeight(20)
     button:SetPoint("TOPLEFT", frame, "TOPLEFT", tabStartX + ((i - 1) * 106), -8)
@@ -2046,7 +2101,7 @@ function TwAuras:BuildConfigFrame()
     button:SetScript("OnClick", function() TwAuras:ShowConfigTab(this.__tab) end)
     frame.tabButtons[i] = button
   end
-  frame.minimizeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  frame.minimizeButton = CreateFrame("Button", NextWidgetName("ConfigMinimizeButton"), frame, "UIPanelButtonTemplate")
   frame.minimizeButton:SetWidth(46)
   frame.minimizeButton:SetHeight(20)
   frame.minimizeButton:SetPoint("TOPLEFT", frame, "TOPLEFT", tabStartX + totalTabWidth + 4, -8)
@@ -2058,10 +2113,10 @@ function TwAuras:BuildConfigFrame()
   -- Keep the header and summary fixed while each major editor tab scrolls independently.
   -- The actual tab panels stay as the scroll children so the existing widget parenting can remain intact.
   frame.tabScrolls = {
-    trigger = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
-    display = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
-    conditions = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
-    load = CreateFrame("ScrollFrame", nil, frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    trigger = CreateFrame("ScrollFrame", "TwAurasTriggerTabScroll", frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    display = CreateFrame("ScrollFrame", "TwAurasDisplayTabScroll", frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    conditions = CreateFrame("ScrollFrame", "TwAurasConditionsTabScroll", frame.rightPanel, "UIPanelScrollFrameTemplate"),
+    load = CreateFrame("ScrollFrame", "TwAurasLoadTabScroll", frame.rightPanel, "UIPanelScrollFrameTemplate"),
   }
   frame.tabs = {
     trigger = CreateFrame("Frame", nil, frame.rightPanel),
@@ -2228,7 +2283,10 @@ function TwAuras:BuildConfigFrame()
   frame.alphaSlider = MakeSlider(displayTab, "TwAurasAlphaSlider", 0, 1, 0.05, 8, -376, 220)
   frame.alphaSlider:SetScript("OnValueChanged", function()
     getglobal(this:GetName() .. "Text"):SetText("Alpha: " .. string.format("%.2f", this:GetValue()))
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if TwAuras.configFrame
+      and not TwAuras.configFrame.__suppressLiveUpdate
+      and TwAuras.configFrame.liveUpdateCheck
+      and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
@@ -2595,6 +2653,7 @@ function TwAuras:OpenConfigWindow()
   self.runtime.pendingConfigOpen = nil
   self:BuildConfigFrame()
   self:SetConfigMinimized(false)
+  BringFrameToFront(self.configFrame, UIParent, false)
   self.configFrame:Show()
   self:RefreshConfigUI()
 end

@@ -22,6 +22,22 @@ if string and not string.match and string.find then
   end
 end
 
+-- Some 1.12 Lua builds expose math.mod but not math.fmod.
+if math and not math.fmod then
+  if math.mod then
+    math.fmod = math.mod
+  else
+    function math.fmod(a, b)
+      local left = tonumber(a) or 0
+      local right = tonumber(b) or 0
+      if right == 0 then
+        return 0
+      end
+      return left - math.floor(left / right) * right
+    end
+  end
+end
+
 -- TwAuras is a shared runtime table extended across multiple files.
 -- This file mostly establishes the baseline state and event subscriptions that the other
 -- modules build on top of.
