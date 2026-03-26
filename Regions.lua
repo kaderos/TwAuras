@@ -93,6 +93,25 @@ local function SetCooldownFrameTimer(frame, startTime, duration)
   return false
 end
 
+-- Some 1.12 clients reject "Cooldown" frame type; build a best-effort cooldown frame.
+local function CreateCooldownSwipeFrame(parent)
+  local ok
+  local frame
+  ok, frame = pcall(CreateFrame, "Cooldown", nil, parent)
+  if ok and frame then
+    return frame
+  end
+  ok, frame = pcall(CreateFrame, "Frame", nil, parent, "CooldownFrameTemplate")
+  if ok and frame then
+    return frame
+  end
+  ok, frame = pcall(CreateFrame, "Frame", nil, parent)
+  if ok and frame then
+    return frame
+  end
+  return nil
+end
+
 -- Text anchors are constrained to the simplified set the config UI exposes.
 local function GetAnchorPoint(anchor)
   local normalized = string.upper(anchor or "CENTER")
@@ -404,9 +423,11 @@ function TwAuras:CreateIconRegion(aura)
   frame.cooldownOverlay:SetTexture("Interface\\Buttons\\WHITE8X8")
   frame.cooldownOverlay:SetVertexColor(0, 0, 0, 0.45)
   frame.cooldownOverlay:Hide()
-  frame.cooldown = CreateFrame("Cooldown", nil, frame)
-  frame.cooldown:SetAllPoints(frame)
-  frame.cooldown:Hide()
+  frame.cooldown = CreateCooldownSwipeFrame(frame)
+  if frame.cooldown then
+    frame.cooldown:SetAllPoints(frame)
+    frame.cooldown:Hide()
+  end
 
   frame.timeText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 
@@ -436,13 +457,15 @@ function TwAuras:CreateIconRegion(aura)
     SetColor(self.icon, GetIconTint(display))
     if display.showCooldownSwipe and state.expirationTime and state.duration and state.duration > 0 then
       local cooldownStart = state.startTime or (state.expirationTime - state.duration)
-      if SetCooldownFrameTimer(self.cooldown, cooldownStart, state.duration) then
+      if self.cooldown and SetCooldownFrameTimer(self.cooldown, cooldownStart, state.duration) then
         self.cooldown:Show()
-      else
+      elseif self.cooldown then
         self.cooldown:Hide()
       end
     else
-      self.cooldown:Hide()
+      if self.cooldown then
+        self.cooldown:Hide()
+      end
     end
     if display.showCooldownOverlay and state.expirationTime and state.duration and state.duration > 0 and state.expirationTime > GetTime() then
       self.cooldownOverlay:Show()
@@ -492,7 +515,9 @@ function TwAuras:CreateIconRegion(aura)
     SetColor(self.icon, {0.6, 0.6, 0.6, 1})
     self.timeText:Hide()
     self.stackText:Hide()
-    self.cooldown:Hide()
+    if self.cooldown then
+      self.cooldown:Hide()
+    end
     self.cooldownOverlay:Hide()
   end
 

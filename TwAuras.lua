@@ -358,7 +358,15 @@ function TwAuras:HandleSlashCommand(msg)
     self:ToggleObjectTracker()
     return
   end
-  self:ToggleConfig()
+  if type(self.ToggleConfig) == "function" then
+    self:ToggleConfig()
+    return
+  end
+  if type(self.OpenConfigWindow) == "function" then
+    self:OpenConfigWindow()
+    return
+  end
+  self:Print("Config module not ready. Use /reload. If it persists, run /console scriptErrors 1 and reload to capture the first load error.")
 end
 
 SLASH_TWAURAS1 = "/twa"
