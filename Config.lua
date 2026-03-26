@@ -65,22 +65,27 @@ end
 
 -- Generic hover help is used for token reminders, field explanations, and other compact hints.
 local function AttachHoverTooltip(widget, tooltipText)
-  if not widget or not tooltipText or tooltipText == "" then
+  if not widget or not widget.SetScript or not tooltipText or tooltipText == "" then
     return
   end
   widget:SetScript("OnEnter", function()
+    if not GameTooltip then
+      return
+    end
     GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
     GameTooltip:SetText(tooltipText, 1, 1, 1, 1, true)
     GameTooltip:Show()
   end)
   widget:SetScript("OnLeave", function()
-    GameTooltip:Hide()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
   end)
 end
 
 -- The object summary tooltip shares the runtime breakdown instead of duplicating its own counts.
 local function AttachObjectSummaryTooltip(widget)
-  if not widget then
+  if not widget or not widget.SetScript then
     return
   end
   widget:SetScript("OnEnter", function()
