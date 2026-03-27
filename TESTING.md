@@ -12,7 +12,7 @@
 Use the local test harness for syntax-adjacent logic before going in game:
 
 1. Install `Lua 5.1` or `LuaJIT`.
-2. From the project root, run `.\TwAuras\tests\run.ps1`.
+2. From the project root, run `.\tests\run.ps1`.
 3. Review the `PASS` / `FAIL` output for:
    tracked debuff timers,
    combo-point debuff snapshots,

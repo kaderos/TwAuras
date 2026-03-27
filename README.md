@@ -246,10 +246,10 @@ Use it for:
 Run it from the project root with:
 
 ```powershell
-.\TwAuras\tests\run.ps1
+.\tests\run.ps1
 ```
 
-See `TESTING.md` for more detail.
+See `README-testing.md` and `TESTING.md` for more detail.
 
 ## Project Structure
 
@@ -259,6 +259,7 @@ See `TESTING.md` for more detail.
 - `Regions.lua`: region registry, display creation, visual state application
 - `Config.lua`: in-game editor, selectors, icon picker, wizard UI
 - `IconList.lua`: searchable icon manifest
+- `README-testing.md`: local deterministic QA harness guide
 - `TESTING.md`: test guidance
 
 ## Maintenance Note

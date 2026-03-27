@@ -41,6 +41,39 @@ local function assert_true(value, message)
   end
 end
 
+-- Global API overrides let negative-compat tests simulate missing Turtle/Vanilla APIs safely.
+local function with_global_overrides(overrides, fn)
+  local previous = {}
+  local key
+  local ok
+  local err
+  for key, value in pairs(overrides or {}) do
+    previous[key] = _G[key]
+    _G[key] = value
+  end
+  ok, err = pcall(fn)
+  for key, value in pairs(previous) do
+    _G[key] = value
+  end
+  if not ok then
+    error(err, 2)
+  end
+end
+
+-- Replay steps keep event-ordering tests deterministic and easy to read.
+local function run_replay_steps(steps)
+  local i
+  for i = 1, table.getn(steps or {}) do
+    local step = steps[i]
+    if step.at ~= nil then
+      stub.set_time(step.at)
+    end
+    if step.run then
+      step.run()
+    end
+  end
+end
+
 -- Tests are registered up front, then executed in order at the bottom of the file.
 local function add_test(name, fn)
   table.insert(tests, { name = name, fn = fn })
@@ -3170,6 +3203,140 @@ add_test("unit frame debug stays quiet when disabled", function()
 
   TwAuras:BuildUnitFrameStates(aura)
   assert_equal(table.getn(stub.get_messages()), 0, "unit frame debug should stay quiet when disabled")
+end)
+
+add_test("player aura scan falls back when legacy player buff api is missing", function()
+  fresh_runtime()
+  stub.set_unit("player", { name = "Fallback Tester", exists = true })
+  stub.set_unit_buffs("player", {
+    { name = "Clearcasting", texture = "Interface\\Icons\\Spell_Shadow_ManaBurn", count = 1 },
+  })
+
+  local originalSetPlayerBuff = GameTooltip.SetPlayerBuff
+  local ok
+  local err
+  GameTooltip.SetPlayerBuff = nil
+  ok, err = pcall(function()
+    with_global_overrides({
+      GetPlayerBuff = nil,
+    }, function()
+      local state = TwAuras:ScanAura("player", "Clearcasting", false)
+      assert_true(state.active, "player aura scan should still succeed without GetPlayerBuff/SetPlayerBuff")
+      assert_equal(state.name, "Clearcasting", "fallback player aura scan should recover aura name")
+    end)
+  end)
+  GameTooltip.SetPlayerBuff = originalSetPlayerBuff
+  if not ok then
+    error(err, 2)
+  end
+end)
+
+add_test("bag count falls back to manual scan when GetItemCount is unavailable", function()
+  fresh_runtime()
+  stub.set_bag_items({
+    [0] = {
+      { name = "Major Mana Potion", count = 4 },
+      { name = "Runecloth Bandage", count = 2 },
+    },
+    [1] = {
+      { name = "Major Mana Potion", count = 3 },
+    },
+  })
+
+  with_global_overrides({
+    GetItemCount = nil,
+  }, function()
+    local total = TwAuras:GetBagItemCountByName("Major Mana Potion")
+    assert_equal(total, 7, "manual bag scan fallback should total item counts across bags")
+  end)
+end)
+
+add_test("threat detection falls back when threat apis are unavailable", function()
+  fresh_runtime()
+  stub.set_unit("player", { name = "Tank", exists = true })
+  stub.set_unit("targettarget", { name = "Tank", exists = true })
+
+  with_global_overrides({
+    UnitThreatSituation = nil,
+    UnitDetailedThreatSituation = nil,
+  }, function()
+    assert_true(TwAuras:PlayerHasAggro(), "threat fallback should match targettarget to player")
+  end)
+end)
+
+add_test("range info falls back to action slot when interact api is unavailable", function()
+  fresh_runtime()
+  stub.set_unit("target", {
+    name = "Range Dummy",
+    exists = true,
+  })
+  stub.set_action(7, {
+    inRange = true,
+  })
+
+  with_global_overrides({
+    CheckInteractDistance = nil,
+  }, function()
+    local info = TwAuras:GetRangeInfo({
+      rangeUnit = "target",
+      rangeMode = "action",
+      actionSlot = 7,
+    })
+    assert_true(info and info.inRange, "range fallback should use action slot range when interact api is missing")
+  end)
+end)
+
+add_test("replay keeps finisher snapshot through cast and apply jitter", function()
+  fresh_runtime()
+  stub.set_unit("target", { name = "Replay Dummy", exists = true })
+  stub.set_combo_points(4)
+  TwAuras.runtime.lastPlayerComboPoints = 4
+
+  run_replay_steps({
+    {
+      at = 100,
+      run = function()
+        TwAuras:TrackPlayerDebuffsFromCombatLog("You begin to cast Rip.")
+      end,
+    },
+    {
+      at = 100.2,
+      run = function()
+        TwAuras:RecordCombatLog("CHAT_MSG_SPELL_SELF_DAMAGE", "You hit Replay Dummy for 42.")
+      end,
+    },
+    {
+      at = 101,
+      run = function()
+        TwAuras:TrackPlayerDebuffsFromCombatLog("Replay Dummy is afflicted by your Rip.")
+      end,
+    },
+  })
+
+  local tracked = TwAuras:GetTrackedDebuff("target", "Rip")
+  assert_true(tracked ~= nil, "replay should produce a tracked Rip timer")
+  assert_equal(tracked.comboPoints, 4, "replay should preserve combo points from cast start")
+end)
+
+add_test("replay keeps only newest combat log lines under heavy volume", function()
+  fresh_runtime()
+  TwAuras.db = {
+    auraStore = {
+      version = 1,
+      order = {},
+      items = {},
+    },
+  }
+
+  local i
+  for i = 1, 25 do
+    stub.set_time(200 + i)
+    TwAuras:RecordCombatLog("CHAT_MSG_SPELL_SELF_DAMAGE", "Replay line " .. tostring(i))
+  end
+
+  assert_equal(table.getn(TwAuras.runtime.recentCombatLog), 8, "recent combat log should keep the newest eight lines")
+  assert_equal(TwAuras.runtime.recentCombatLog[1].message, "Replay line 25", "newest replay line should be first")
+  assert_equal(TwAuras.runtime.recentCombatLog[8].message, "Replay line 18", "oldest retained replay line should be eighth")
 end)
 
 local passed = 0
