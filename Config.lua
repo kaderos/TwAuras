@@ -40,6 +40,14 @@ local function BringFrameToFront(frame, owner, isPopup)
   end
 end
 
+local function IsLiveUpdateEnabled()
+  local frame = TwAuras and TwAuras.configFrame or nil
+  if not frame or frame.__suppressLiveUpdate or frame.__applyingEditor then
+    return false
+  end
+  return frame.liveUpdateCheck and frame.liveUpdateCheck:GetChecked()
+end
+
 -- The config reuses the same hue math as the region runtime so previews match in-game rendering.
 local function HueToRGB(hue)
   local normalized = (tonumber(hue) or 0) / 60
@@ -734,7 +742,15 @@ function TwAuras:SetDescriptorWidgetValue(widget, value)
     end
     if hue < 0 then hue = 0 end
     if hue > 360 then hue = 360 end
+    local frame = TwAuras and TwAuras.configFrame or nil
+    local previousSuppress = frame and frame.__suppressLiveUpdate or nil
+    if frame then
+      frame.__suppressLiveUpdate = true
+    end
     widget.control:SetValue(hue)
+    if frame then
+      frame.__suppressLiveUpdate = previousSuppress
+    end
     if widget.valueText then
       widget.valueText:SetText(string.format("%d", hue))
     end
@@ -775,7 +791,7 @@ function TwAuras:BuildDescriptorFieldGroup(parent, prefix, fields, startX, start
     elseif field.type == "select" then
       widget.label = MakeLabel(parent, field.label, x, y)
       widget.control = MakeSelect(parent, field.width or 140, 20, x, y - 18, field.options or {}, function()
-        if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+        if IsLiveUpdateEnabled() then
           TwAuras:ApplyEditorToSelectedAura(true)
         end
       end)
@@ -791,10 +807,7 @@ function TwAuras:BuildDescriptorFieldGroup(parent, prefix, fields, startX, start
           local r, g, b = HueToRGB(hue)
           widget.preview:SetBackdropColor(r, g, b, 1)
         end
-        if TwAuras.configFrame
-          and not TwAuras.configFrame.__suppressLiveUpdate
-          and TwAuras.configFrame.liveUpdateCheck
-          and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+        if IsLiveUpdateEnabled() then
           TwAuras:ApplyEditorToSelectedAura(true)
         end
       end)
@@ -1131,7 +1144,7 @@ function TwAuras:BuildIconPicker()
       local widget = TwAuras.configFrame and TwAuras.configFrame.regionFieldWidgets and TwAuras.configFrame.regionFieldWidgets.iconPath or nil
       if widget and widget.control then
         widget.control:SetText(this.__iconPath or "")
-        if TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+        if IsLiveUpdateEnabled() then
           TwAuras:ApplyEditorToSelectedAura(true)
         end
       end
@@ -1159,7 +1172,7 @@ function TwAuras:BuildIconPicker()
     local widget = TwAuras.configFrame and TwAuras.configFrame.regionFieldWidgets and TwAuras.configFrame.regionFieldWidgets.iconPath or nil
     if widget and widget.control then
       widget.control:SetText("")
-      if TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+      if IsLiveUpdateEnabled() then
         TwAuras:ApplyEditorToSelectedAura(true)
       end
     end
@@ -1322,7 +1335,7 @@ function TwAuras:BuildSoundPicker()
     local control = targetField and TwAuras.configFrame and TwAuras.configFrame[targetField] or nil
     if control and soundValue and soundValue ~= "" then
       control:SetText(soundValue)
-      if TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+      if IsLiveUpdateEnabled() then
         TwAuras:ApplyEditorToSelectedAura(true)
       end
       TwAuras.soundPickerFrame:Hide()
@@ -1339,7 +1352,7 @@ function TwAuras:BuildSoundPicker()
     local control = targetField and TwAuras.configFrame and TwAuras.configFrame[targetField] or nil
     if control then
       control:SetText("")
-      if TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+      if IsLiveUpdateEnabled() then
         TwAuras:ApplyEditorToSelectedAura(true)
       end
     end
@@ -1878,6 +1891,10 @@ function TwAuras:ApplyEditorToSelectedAura(isLive)
   if not aura or not frame then
     return
   end
+  if frame.__applyingEditor then
+    return
+  end
+  frame.__applyingEditor = true
 
   local wantedName = frame.nameBox:GetText()
   aura.name = self:GetUniqueAuraName(wantedName ~= "" and wantedName or ("New Aura " .. tostring(aura.id)), aura.id)
@@ -1986,6 +2003,7 @@ function TwAuras:ApplyEditorToSelectedAura(isLive)
   if not isLive then
     self:RefreshConfigUI()
   end
+  frame.__applyingEditor = false
 end
 
 -- BuildConfigFrame creates the static shell once; later updates only swap values and descriptor groups.
@@ -2148,7 +2166,7 @@ function TwAuras:BuildConfigFrame()
   triggerTab:SetHeight(470)
   MakeLabel(triggerTab, "Logic", 300, -8)
   frame.triggerModeBox = MakeSelect(triggerTab, 90, 20, 352, -4, TRIGGER_MODE_OPTIONS, function()
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if IsLiveUpdateEnabled() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
@@ -2201,7 +2219,7 @@ function TwAuras:BuildConfigFrame()
   MakeLabel(triggerTab, "Selected Trigger", 200, -38)
   MakeLabel(triggerTab, "Type", 200, -80)
   frame.triggerTypeBox = MakeSelect(triggerTab, 120, 20, 250, -76, self:GetAvailableTriggerTypes(), function()
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if IsLiveUpdateEnabled() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
     TwAuras:RefreshConfigUI()
@@ -2253,7 +2271,7 @@ function TwAuras:BuildConfigFrame()
   frame.nameBox = MakeEditBox(displayTab, 180, 20, 108, -4)
   MakeLabel(displayTab, "Region Type", 8, -40)
   frame.regionTypeBox = MakeSelect(displayTab, 120, 20, 108, -36, self:GetAvailableRegionTypes(), function()
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if IsLiveUpdateEnabled() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
     TwAuras:RefreshConfigUI()
@@ -2283,10 +2301,7 @@ function TwAuras:BuildConfigFrame()
   frame.alphaSlider = MakeSlider(displayTab, "TwAurasAlphaSlider", 0, 1, 0.05, 8, -376, 220)
   frame.alphaSlider:SetScript("OnValueChanged", function()
     getglobal(this:GetName() .. "Text"):SetText("Alpha: " .. string.format("%.2f", this:GetValue()))
-    if TwAuras.configFrame
-      and not TwAuras.configFrame.__suppressLiveUpdate
-      and TwAuras.configFrame.liveUpdateCheck
-      and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if IsLiveUpdateEnabled() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
@@ -2338,14 +2353,14 @@ function TwAuras:BuildConfigFrame()
 
   MakeLabel(conditionsTab, "Check", 200, -8)
   frame.conditionCheckBox = MakeSelect(conditionsTab, 130, 20, 260, -4, CONDITION_CHECK_OPTIONS, function()
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if IsLiveUpdateEnabled() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
   MakeLabel(conditionsTab, "active, remaining, stacks, value, percent", 370, -8)
   MakeLabel(conditionsTab, "Operator", 200, -40)
   frame.conditionOperatorBox = MakeSelect(conditionsTab, 70, 20, 260, -36, OPERATOR_OPTIONS, function()
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if IsLiveUpdateEnabled() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
@@ -2443,7 +2458,7 @@ function TwAuras:BuildConfigFrame()
   getglobal("TwAurasAllowArenaCheckText"):SetText("Arenas")
   MakeLabel(loadTab, "Class", 8, -160)
   frame.classBox = MakeSelect(loadTab, 120, 20, 108, -156, CLASS_OPTIONS, function()
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if IsLiveUpdateEnabled() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
@@ -2460,13 +2475,13 @@ function TwAuras:BuildConfigFrame()
   MakeLabel(positionTab, "Position", 8, -392)
   MakeLabel(positionTab, "Anchor Point", 8, -418)
   frame.pointBox = MakeSelect(positionTab, 120, 20, 108, -414, POINT_OPTIONS, function()
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if IsLiveUpdateEnabled() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
   MakeLabel(positionTab, "Relative Point", 230, -418)
   frame.relativePointBox = MakeSelect(positionTab, 120, 20, 340, -414, POINT_OPTIONS, function()
-    if TwAuras.configFrame and TwAuras.configFrame.liveUpdateCheck and TwAuras.configFrame.liveUpdateCheck:GetChecked() then
+    if IsLiveUpdateEnabled() then
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
