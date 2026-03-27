@@ -16,24 +16,14 @@ end
 
 -- Keep config and popup windows interactable by forcing them above the main editor stack.
 local function BringFrameToFront(frame, owner, isPopup)
-  local baseLevel = 0
-  local bump = isPopup and 40 or 20
-  local wanted = bump
   if not frame then
     return
   end
-  if owner and owner.GetFrameLevel then
-    baseLevel = owner:GetFrameLevel() or 0
-  end
-  wanted = math.max(baseLevel + bump, 1)
   if frame.SetToplevel then
     frame:SetToplevel(true)
   end
   if frame.SetFrameStrata then
     frame:SetFrameStrata(isPopup and "FULLSCREEN_DIALOG" or "DIALOG")
-  end
-  if frame.SetFrameLevel then
-    frame:SetFrameLevel(wanted)
   end
   if frame.Raise then
     frame:Raise()
@@ -2170,10 +2160,10 @@ function TwAuras:BuildConfigFrame()
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
-  MakeLabel(triggerTab, "all, any, priority", 430, -8)
-  frame.triggerDebugCheck = MakeCheck(triggerTab, "TwAurasTriggerDebugCheck", "Debug Trigger", 500, -8)
-  frame.combatLogDebugCheck = MakeCheck(triggerTab, "TwAurasCombatLogDebugCheck", "Combat Log Debug", 500, -36)
-  frame.timerDebugCheck = MakeCheck(triggerTab, "TwAurasTimerDebugCheck", "Timer Debug", 500, -64)
+  MakeLabel(triggerTab, "all / any / priority", 430, -8)
+  frame.triggerDebugCheck = MakeCheck(triggerTab, "TwAurasTriggerDebugCheck", "Debug Trigger", 524, -8)
+  frame.combatLogDebugCheck = MakeCheck(triggerTab, "TwAurasCombatLogDebugCheck", "Combat Log Debug", 524, -36)
+  frame.timerDebugCheck = MakeCheck(triggerTab, "TwAurasTimerDebugCheck", "Timer Debug", 524, -64)
 
   frame.triggerListPanel = CreateFrame("Frame", nil, triggerTab)
   frame.triggerListPanel:SetWidth(170)
@@ -2276,9 +2266,9 @@ function TwAuras:BuildConfigFrame()
     end
     TwAuras:RefreshConfigUI()
   end)
-  MakeLabel(displayTab, regionTypeList, 216, -40)
-  frame.displayDebugCheck = MakeCheck(displayTab, "TwAurasDisplayDebugCheck", "Debug Display", 500, -8)
-  frame.unitFramesDebugCheck = MakeCheck(displayTab, "TwAurasUnitFramesDebugCheck", "Unit Frame Debug", 500, -36)
+  MakeLabel(displayTab, regionTypeList, 250, -40)
+  frame.displayDebugCheck = MakeCheck(displayTab, "TwAurasDisplayDebugCheck", "Debug Display", 524, -8)
+  frame.unitFramesDebugCheck = MakeCheck(displayTab, "TwAurasUnitFramesDebugCheck", "Unit Frame Debug", 524, -36)
   frame.regionDescriptorTitle = displayTab:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   frame.regionDescriptorTitle:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -70)
   frame.regionDescriptorHelp = displayTab:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -2297,7 +2287,7 @@ function TwAuras:BuildConfigFrame()
   frame.regionFieldContent:SetWidth(620)
   frame.regionFieldContent:SetHeight(1)
   frame.regionFieldScroll:SetScrollChild(frame.regionFieldContent)
-  frame.iconPickerButton = MakeButton(displayTab, "Pick Icon", 90, 20, 548, -36, function() TwAuras:OpenIconPicker() end)
+  frame.iconPickerButton = MakeButton(displayTab, "Pick Icon", 90, 20, 420, -36, function() TwAuras:OpenIconPicker() end)
   frame.alphaSlider = MakeSlider(displayTab, "TwAurasAlphaSlider", 0, 1, 0.05, 8, -376, 220)
   frame.alphaSlider:SetScript("OnValueChanged", function()
     getglobal(this:GetName() .. "Text"):SetText("Alpha: " .. string.format("%.2f", this:GetValue()))
@@ -2309,7 +2299,7 @@ function TwAuras:BuildConfigFrame()
 
   local conditionsTab = frame.tabs.conditions
   conditionsTab:SetHeight(560)
-  frame.conditionsDebugCheck = MakeCheck(conditionsTab, "TwAurasConditionsDebugCheck", "Debug Conditions", 500, -8)
+  frame.conditionsDebugCheck = MakeCheck(conditionsTab, "TwAurasConditionsDebugCheck", "Debug Conditions", 524, -68)
   frame.conditionListPanel = CreateFrame("Frame", nil, conditionsTab)
   frame.conditionListPanel:SetWidth(170)
   frame.conditionListPanel:SetHeight(300)
@@ -2357,7 +2347,7 @@ function TwAuras:BuildConfigFrame()
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
-  MakeLabel(conditionsTab, "active, remaining, stacks, value, percent", 370, -8)
+  MakeLabel(conditionsTab, "active, remaining, stacks, value, percent", 406, -8)
   MakeLabel(conditionsTab, "Operator", 200, -40)
   frame.conditionOperatorBox = MakeSelect(conditionsTab, 70, 20, 260, -36, OPERATOR_OPTIONS, function()
     if IsLiveUpdateEnabled() then
@@ -2462,7 +2452,7 @@ function TwAuras:BuildConfigFrame()
       TwAuras:ApplyEditorToSelectedAura(true)
     end
   end)
-  MakeLabel(loadTab, "ROGUE, DRUID, WARRIOR, etc. Leave blank for all", 216, -160)
+  MakeLabel(loadTab, "ROGUE, DRUID, WARRIOR, etc. Leave blank for all", 246, -160)
   MakeLabel(loadTab, "Zone Text", 8, -194)
   frame.zoneTextBox = MakeEditBox(loadTab, 280, 20, 108, -190)
   MakeLabel(loadTab, "Partial match against the current zone or sub zone.", 8, -220)
