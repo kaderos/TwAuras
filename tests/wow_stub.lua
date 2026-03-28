@@ -134,6 +134,10 @@ local function makeFrame()
   function frame:SetFrameStrata() end
   function frame:SetReverseFill() end
   function frame:SetAlpha() end
+  function frame:EnableMouseWheel() end
+  function frame:GetVerticalScroll() return self.verticalScroll or 0 end
+  function frame:SetVerticalScroll(value) self.verticalScroll = value or 0 end
+  function frame:GetVerticalScrollRange() return self.verticalScrollRange or 0 end
   function frame:SetMovable() end
   function frame:EnableMouse() end
   function frame:RegisterForDrag() end
