@@ -38,6 +38,28 @@ local function IsLiveUpdateEnabled()
   return frame.liveUpdateCheck and frame.liveUpdateCheck:GetChecked()
 end
 
+local function ScrollFrameByWheel(scrollFrame, delta)
+  local current = 0
+  local max = 0
+  local step = 28
+  local nextScroll = 0
+  if not scrollFrame or not scrollFrame.SetVerticalScroll or not scrollFrame.GetVerticalScroll then
+    return
+  end
+  current = scrollFrame:GetVerticalScroll() or 0
+  if scrollFrame.GetVerticalScrollRange then
+    max = scrollFrame:GetVerticalScrollRange() or 0
+  end
+  nextScroll = current - ((delta or 0) * step)
+  if nextScroll < 0 then
+    nextScroll = 0
+  end
+  if max and nextScroll > max then
+    nextScroll = max
+  end
+  scrollFrame:SetVerticalScroll(nextScroll)
+end
+
 -- The config reuses the same hue math as the region runtime so previews match in-game rendering.
 local function HueToRGB(hue)
   local normalized = (tonumber(hue) or 0) / 60
@@ -994,8 +1016,7 @@ end
 
 -- Picker filters are split from picker construction so searches can rerender existing rows cheaply.
 function TwAuras:RefreshIconPickerFilter()
-  -- The picker reuses a fixed button pool and simply paginates visible matches. That keeps it
-  -- workable even with a large icon manifest on the old client.
+  -- Icon filtering now uses a scrolling grid so all matches stay reachable without paging.
   local frame = self.iconPickerFrame
   if not frame then
     return
@@ -1007,8 +1028,11 @@ function TwAuras:RefreshIconPickerFilter()
   end
 
   local columns = frame.columns or 8
-  local rowsPerPage = frame.rowsPerPage or 6
-  local pageSize = columns * rowsPerPage
+  local spacingX = frame.iconSpacingX or 46
+  local spacingY = frame.iconSpacingY or 42
+  local totalMatches = 0
+  local totalRows = 0
+  local visibleIndex = 0
   local matches = {}
   local i
   for i = 1, table.getn(frame.buttons or {}) do
@@ -1021,24 +1045,20 @@ function TwAuras:RefreshIconPickerFilter()
     end
   end
 
-  local totalMatches = table.getn(matches)
-  local totalPages = math.max(1, math.ceil(totalMatches / pageSize))
-  if not frame.pageIndex or frame.pageIndex < 1 then
-    frame.pageIndex = 1
+  totalMatches = table.getn(matches)
+  totalRows = math.max(1, math.ceil(totalMatches / columns))
+  if frame.scrollChild and frame.scrollChild.SetHeight then
+    frame.scrollChild:SetHeight(math.max(1, totalRows * spacingY))
   end
-  if frame.pageIndex > totalPages then
-    frame.pageIndex = totalPages
+  if frame.scrollFrame and frame.scrollFrame.SetVerticalScroll then
+    frame.scrollFrame:SetVerticalScroll(0)
   end
 
-  local startIndex = ((frame.pageIndex - 1) * pageSize) + 1
-  local endIndex = math.min(totalMatches, startIndex + pageSize - 1)
-  local visibleIndex = 0
-
-  for i = startIndex, endIndex do
+  for i = 1, totalMatches do
     local button = matches[i]
     if button then
       button:ClearAllPoints()
-      button:SetPoint("TOPLEFT", frame, "TOPLEFT", 18 + (math.fmod(visibleIndex, columns) * 46), -90 - (math.floor(visibleIndex / columns) * 42))
+      button:SetPoint("TOPLEFT", frame.scrollChild, "TOPLEFT", math.fmod(visibleIndex, columns) * spacingX, -(math.floor(visibleIndex / columns) * spacingY))
       button:Show()
       visibleIndex = visibleIndex + 1
     end
@@ -1052,20 +1072,6 @@ function TwAuras:RefreshIconPickerFilter()
     end
   end
 
-  if frame.pageText then
-    if totalMatches == 0 then
-      frame.pageText:SetText("Page 0 / 0")
-    else
-      frame.pageText:SetText("Page " .. frame.pageIndex .. " / " .. totalPages)
-    end
-  end
-
-  if frame.prevButton then
-    if frame.pageIndex <= 1 then frame.prevButton:Disable() else frame.prevButton:Enable() end
-  end
-  if frame.nextButton then
-    if frame.pageIndex >= totalPages then frame.nextButton:Disable() else frame.nextButton:Enable() end
-  end
 end
 
 function TwAuras:BuildIconPicker()
@@ -1076,24 +1082,28 @@ function TwAuras:BuildIconPicker()
   end
 
   local columns = 8
-  local rowsPerPage = 6
-  local pickerHeight = 96 + (rowsPerPage * 42) + 28
+  local visibleRows = 6
+  local iconSpacingX = 44
+  local iconSpacingY = 42
+  local pickerHeight = 132 + (visibleRows * iconSpacingY) + 28
 
   local frame = CreateFrame("Frame", "TwAurasIconPickerFrame", UIParent)
   frame:SetWidth(420)
   frame:SetHeight(pickerHeight)
   frame.columns = columns
-  frame.rowsPerPage = rowsPerPage
-  frame.pageIndex = 1
+  frame.iconSpacingX = iconSpacingX
+  frame.iconSpacingY = iconSpacingY
   frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  frame:EnableMouse(true)
   frame:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
     tile = true,
-    tileSize = 32,
-    edgeSize = 32,
-    insets = { left = 11, right = 12, top = 12, bottom = 11 }
+    tileSize = 16,
+    edgeSize = 12,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 }
   })
+  frame:SetBackdropColor(0, 0, 0, 1)
   frame:SetScript("OnHide", function()
     TwAuras:ClearAuraPreviews()
     TwAuras:ClearAuraPreviewChoices()
@@ -1110,22 +1120,47 @@ function TwAuras:BuildIconPicker()
   frame.searchBox:SetScript("OnTextChanged", function()
     TwAuras:RefreshIconPickerFilter()
   end)
+  frame.searchBox:EnableMouseWheel(true)
+  frame.searchBox:SetScript("OnMouseWheel", function(_, delta)
+    ScrollFrameByWheel(frame.scrollFrame, delta or arg1 or 0)
+  end)
   frame.searchHelp = MakeLabel(frame, "Type part of a file path like swipe, bear, or rejuvenation", 18, -60)
+  frame.scrollFrame = CreateFrame("ScrollFrame", "TwAurasIconPickerScroll", frame, "UIPanelScrollFrameTemplate")
+  frame.scrollFrame:SetWidth(352)
+  frame.scrollFrame:SetHeight((visibleRows * iconSpacingY) - 10)
+  frame.scrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -90)
+  frame.scrollFrame:EnableMouseWheel(true)
+  frame.scrollFrame:SetScript("OnMouseWheel", function(_, delta)
+    ScrollFrameByWheel(frame.scrollFrame, delta or arg1 or 0)
+  end)
+  frame.scrollChild = CreateFrame("Frame", nil, frame.scrollFrame)
+  frame.scrollChild:SetWidth(columns * iconSpacingX)
+  frame.scrollChild:SetHeight(1)
+  frame.scrollFrame:SetScrollChild(frame.scrollChild)
+  frame.scrollChild:EnableMouseWheel(true)
+  frame.scrollChild:SetScript("OnMouseWheel", function(_, delta)
+    ScrollFrameByWheel(frame.scrollFrame, delta or arg1 or 0)
+  end)
   frame.noResultsText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  frame.noResultsText:SetPoint("TOP", frame, "TOP", 0, -128)
+  frame.noResultsText:SetPoint("TOP", frame, "TOP", 0, -132)
   frame.noResultsText:SetText("No matching icons in the current picker list.")
   frame.noResultsText:Hide()
-  frame.pageText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  frame.pageText:SetPoint("TOP", frame, "TOP", 0, -78)
-  frame.pageText:SetText("Page 1 / 1")
+  frame:EnableMouseWheel(true)
+  frame:SetScript("OnMouseWheel", function(_, delta)
+    ScrollFrameByWheel(frame.scrollFrame, delta or arg1 or 0)
+  end)
 
   frame.buttons = {}
   local i
   for i = 1, table.getn(ICON_PICKER_TEXTURES) do
-    local button = CreateFrame("Button", nil, frame)
+    local button = CreateFrame("Button", nil, frame.scrollChild)
     button:SetWidth(32)
     button:SetHeight(32)
-    button:SetPoint("TOPLEFT", frame, "TOPLEFT", 18 + (math.fmod(i - 1, columns) * 46), -90 - (math.floor((i - 1) / columns) * 42))
+    button:SetPoint("TOPLEFT", frame.scrollChild, "TOPLEFT", math.fmod(i - 1, columns) * iconSpacingX, -(math.floor((i - 1) / columns) * iconSpacingY))
+    button:EnableMouseWheel(true)
+    button:SetScript("OnMouseWheel", function(_, delta)
+      ScrollFrameByWheel(frame.scrollFrame, delta or arg1 or 0)
+    end)
     button.texture = button:CreateTexture(nil, "ARTWORK")
     button.texture:SetAllPoints(button)
     button.texture:SetTexture(ICON_PICKER_TEXTURES[i])
@@ -1136,6 +1171,7 @@ function TwAuras:BuildIconPicker()
         widget.control:SetText(this.__iconPath or "")
         if IsLiveUpdateEnabled() then
           TwAuras:ApplyEditorToSelectedAura(true)
+          TwAuras:RefreshAuraList()
         end
       end
       TwAuras.iconPickerFrame:Hide()
@@ -1143,33 +1179,27 @@ function TwAuras:BuildIconPicker()
     frame.buttons[i] = button
   end
 
-  frame.prevButton = MakeButton(frame, "<", 28, 20, 146, -74, function()
-    if not TwAuras.iconPickerFrame then
-      return
-    end
-    TwAuras.iconPickerFrame.pageIndex = math.max(1, (TwAuras.iconPickerFrame.pageIndex or 1) - 1)
-    TwAuras:RefreshIconPickerFilter()
-  end)
-  frame.nextButton = MakeButton(frame, ">", 28, 20, 246, -74, function()
-    if not TwAuras.iconPickerFrame then
-      return
-    end
-    TwAuras.iconPickerFrame.pageIndex = (TwAuras.iconPickerFrame.pageIndex or 1) + 1
-    TwAuras:RefreshIconPickerFilter()
-  end)
-
   frame.clearButton = MakeButton(frame, "Use Trigger Icon", 110, 22, 34, -(pickerHeight - 34), function()
     local widget = TwAuras.configFrame and TwAuras.configFrame.regionFieldWidgets and TwAuras.configFrame.regionFieldWidgets.iconPath or nil
     if widget and widget.control then
       widget.control:SetText("")
       if IsLiveUpdateEnabled() then
         TwAuras:ApplyEditorToSelectedAura(true)
+        TwAuras:RefreshAuraList()
       end
     end
     TwAuras.iconPickerFrame:Hide()
   end)
-  frame.closeButton = MakeButton(frame, "Close", 90, 22, 286, -(pickerHeight - 34), function()
+  frame.clearButton:EnableMouseWheel(true)
+  frame.clearButton:SetScript("OnMouseWheel", function(_, delta)
+    ScrollFrameByWheel(frame.scrollFrame, delta or arg1 or 0)
+  end)
+  frame.closeButton = MakeButton(frame, "Close", 90, 22, 278, -(pickerHeight - 34), function()
     frame:Hide()
+  end)
+  frame.closeButton:EnableMouseWheel(true)
+  frame.closeButton:SetScript("OnMouseWheel", function(_, delta)
+    ScrollFrameByWheel(frame.scrollFrame, delta or arg1 or 0)
   end)
 
   self.iconPickerFrame = frame
@@ -1436,8 +1466,10 @@ function TwAuras:OpenIconPicker()
   if self.iconPickerFrame.searchBox then
     self.iconPickerFrame.searchBox:SetText("")
   end
-  self.iconPickerFrame.pageIndex = 1
   self:RefreshIconPickerFilter()
+  if self.iconPickerFrame.scrollFrame and self.iconPickerFrame.scrollFrame.SetVerticalScroll then
+    self.iconPickerFrame.scrollFrame:SetVerticalScroll(0)
+  end
   BringFrameToFront(self.iconPickerFrame, self.configFrame, true)
   self.iconPickerFrame:Show()
 end
@@ -1775,7 +1807,7 @@ function TwAuras:RefreshEditorFields()
   self:SetSelectValue(frame.triggerTypeBox, trigger.type or "", frame.triggerTypeBox.__options)
   local triggerDefinition = self:GetTriggerTypeDefinition(trigger.type) or self:GetTriggerTypeDefinition("none")
   frame.triggerDescriptorTitle:SetText((triggerDefinition and triggerDefinition.displayName or "Trigger") .. " Fields")
-  frame.triggerDescriptorHelp:SetText(triggerDefinition and JoinKeys(self:GetAvailableTriggerTypes()) or "")
+  frame.triggerDescriptorHelp:SetText(triggerDefinition and "Configure the selected trigger fields below." or "")
   frame.triggerFieldWidgets = self:EnsureDescriptorFieldGroup("triggerField", frame.triggerFieldPanel, "Trigger", triggerDefinition, 0, 0, 170, 62)
   local _, triggerWidget
   for _, triggerWidget in pairs(frame.triggerFieldWidgets or {}) do
@@ -2011,6 +2043,21 @@ function TwAuras:BuildConfigFrame()
   frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
   frame:SetToplevel(true)
   frame:SetFrameStrata("DIALOG")
+  frame:SetMovable(true)
+  frame:EnableMouse(true)
+  frame:EnableMouseWheel(true)
+  frame:RegisterForDrag("LeftButton")
+  frame:SetScript("OnDragStart", function()
+    this:StartMoving()
+  end)
+  frame:SetScript("OnDragStop", function()
+    this:StopMovingOrSizing()
+  end)
+  frame:SetScript("OnMouseWheel", function(_, delta)
+    local activeTab = TwAuras and TwAuras.configFrame and TwAuras.configFrame.currentTab or nil
+    local activeScroll = activeTab and TwAuras.configFrame and TwAuras.configFrame.tabScrolls and TwAuras.configFrame.tabScrolls[activeTab] or nil
+    ScrollFrameByWheel(activeScroll, delta or arg1 or 0)
+  end)
   frame:SetBackdrop({
     bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
     edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
@@ -2032,7 +2079,7 @@ function TwAuras:BuildConfigFrame()
   local leftBackground = frame.leftPanel:CreateTexture(nil, "BACKGROUND")
   leftBackground:SetAllPoints(frame.leftPanel)
   leftBackground:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-  leftBackground:SetVertexColor(0, 0, 0, 0.25)
+  leftBackground:SetVertexColor(0, 0, 0, 0.80)
   frame.leftBackground = leftBackground
   MakeLabel(frame.leftPanel, "Auras", 6, -8)
   frame.addButton = MakeButton(frame.leftPanel, "[+]", 36, 22, 138, -4, function() TwAuras:AddAura() end)
@@ -2083,7 +2130,7 @@ function TwAuras:BuildConfigFrame()
   local rightBackground = frame.rightPanel:CreateTexture(nil, "BACKGROUND")
   rightBackground:SetAllPoints(frame.rightPanel)
   rightBackground:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
-  rightBackground:SetVertexColor(0, 0, 0, 0.18)
+  rightBackground:SetVertexColor(0, 0, 0, 0.80)
   frame.rightBackground = rightBackground
   frame.editorTitle = frame.rightPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   frame.editorTitle:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 8, -8)
@@ -2098,6 +2145,7 @@ function TwAuras:BuildConfigFrame()
   local tabNames = {"Display", "Trigger", "Conditions", "Load"}
   local totalTabWidth = (table.getn(tabNames) * 102) + ((table.getn(tabNames) - 1) * 4)
   local tabStartX = math.floor((960 - totalTabWidth - 46 - 4) / 2)
+  frame.__minimizeButtonNormalX = tabStartX + totalTabWidth + 4
   local i
   for i = 1, table.getn(tabNames) do
     local button = CreateFrame("Button", NextWidgetName("ConfigTabButton"), frame, "UIPanelButtonTemplate")
@@ -2112,7 +2160,7 @@ function TwAuras:BuildConfigFrame()
   frame.minimizeButton = CreateFrame("Button", NextWidgetName("ConfigMinimizeButton"), frame, "UIPanelButtonTemplate")
   frame.minimizeButton:SetWidth(46)
   frame.minimizeButton:SetHeight(20)
-  frame.minimizeButton:SetPoint("TOPLEFT", frame, "TOPLEFT", tabStartX + totalTabWidth + 4, -8)
+  frame.minimizeButton:SetPoint("TOPLEFT", frame, "TOPLEFT", frame.__minimizeButtonNormalX, -8)
   frame.minimizeButton:SetText("[ _ ]")
   frame.minimizeButton:SetScript("OnClick", function()
     TwAuras:ToggleConfigMinimized()
@@ -2135,17 +2183,28 @@ function TwAuras:BuildConfigFrame()
   }
   local key, scrollFrame
   for key, scrollFrame in pairs(frame.tabScrolls) do
+    local tabScroll = scrollFrame
     scrollFrame:SetWidth(654)
     scrollFrame:SetHeight(470)
     scrollFrame:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 10, -66)
+    scrollFrame:EnableMouseWheel(true)
+    scrollFrame:SetScript("OnMouseWheel", function(_, delta)
+      ScrollFrameByWheel(tabScroll, delta or arg1 or 0)
+    end)
     scrollFrame:Hide()
   end
   local key, panel
   for key, panel in pairs(frame.tabs) do
+    local tabPanel = panel
+    local tabKey = key
     panel:SetWidth(636)
     panel:SetHeight(470)
     if frame.tabScrolls[key] then
       frame.tabScrolls[key]:SetScrollChild(panel)
+      panel:EnableMouseWheel(true)
+      panel:SetScript("OnMouseWheel", function(_, delta)
+        ScrollFrameByWheel(frame.tabScrolls[tabKey], delta or arg1 or 0)
+      end)
     else
       panel:SetPoint("TOPLEFT", frame.rightPanel, "TOPLEFT", 10, -66)
     end
@@ -2178,27 +2237,27 @@ function TwAuras:BuildConfigFrame()
   frame.triggerListContent:SetHeight(1)
   frame.triggerListScroll:SetScrollChild(frame.triggerListContent)
   frame.triggerListRows = self:BuildTriggerListRows(frame.triggerListContent)
-  frame.addTriggerButton = MakeButton(triggerTab, "Add", 50, 20, 8, -346, function()
+  frame.addTriggerButton = MakeButton(triggerTab, "Add", 44, 20, 8, -346, function()
     local aura = TwAuras:GetSelectedAura()
     if not aura then return end
     TwAuras:AddBlankTrigger(aura)
     TwAuras:RefreshConfigUI()
   end)
-  frame.removeTriggerButton = MakeButton(triggerTab, "Remove", 55, 20, 64, -346, function()
+  frame.removeTriggerButton = MakeButton(triggerTab, "Remove", 50, 20, 56, -346, function()
     local aura = TwAuras:GetSelectedAura()
     local _, index = TwAuras:GetSelectedTrigger(aura)
     if not aura or not index then return end
     TwAuras:RemoveTrigger(aura, index)
     TwAuras:RefreshConfigUI()
   end)
-  frame.triggerUpButton = MakeButton(triggerTab, "Up", 45, 20, 125, -346, function()
+  frame.triggerUpButton = MakeButton(triggerTab, "Up", 40, 20, 110, -346, function()
     local aura = TwAuras:GetSelectedAura()
     local _, index = TwAuras:GetSelectedTrigger(aura)
     if not aura or not index then return end
     TwAuras:MoveTrigger(aura, index, -1)
     TwAuras:RefreshConfigUI()
   end)
-  frame.triggerDownButton = MakeButton(triggerTab, "Down", 50, 20, 176, -346, function()
+  frame.triggerDownButton = MakeButton(triggerTab, "Down", 44, 20, 154, -346, function()
     local aura = TwAuras:GetSelectedAura()
     local _, index = TwAuras:GetSelectedTrigger(aura)
     if not aura or not index then return end
@@ -2313,27 +2372,27 @@ function TwAuras:BuildConfigFrame()
   frame.conditionListContent:SetHeight(1)
   frame.conditionListScroll:SetScrollChild(frame.conditionListContent)
   frame.conditionListRows = self:BuildConditionListRows(frame.conditionListContent)
-  frame.addConditionButton = MakeButton(conditionsTab, "Add", 50, 20, 8, -316, function()
+  frame.addConditionButton = MakeButton(conditionsTab, "Add", 44, 20, 8, -316, function()
     local aura = TwAuras:GetSelectedAura()
     if not aura then return end
     TwAuras:AddCondition(aura)
     TwAuras:RefreshConfigUI()
   end)
-  frame.removeConditionButton = MakeButton(conditionsTab, "Remove", 55, 20, 64, -316, function()
+  frame.removeConditionButton = MakeButton(conditionsTab, "Remove", 50, 20, 56, -316, function()
     local aura = TwAuras:GetSelectedAura()
     local _, index = TwAuras:GetSelectedCondition(aura)
     if not aura or not index then return end
     TwAuras:RemoveCondition(aura, index)
     TwAuras:RefreshConfigUI()
   end)
-  frame.conditionUpButton = MakeButton(conditionsTab, "Up", 45, 20, 125, -316, function()
+  frame.conditionUpButton = MakeButton(conditionsTab, "Up", 40, 20, 110, -316, function()
     local aura = TwAuras:GetSelectedAura()
     local _, index = TwAuras:GetSelectedCondition(aura)
     if not aura or not index then return end
     TwAuras:MoveCondition(aura, index, -1)
     TwAuras:RefreshConfigUI()
   end)
-  frame.conditionDownButton = MakeButton(conditionsTab, "Down", 50, 20, 176, -316, function()
+  frame.conditionDownButton = MakeButton(conditionsTab, "Down", 44, 20, 154, -316, function()
     local aura = TwAuras:GetSelectedAura()
     local _, index = TwAuras:GetSelectedCondition(aura)
     if not aura or not index then return end
@@ -2563,7 +2622,14 @@ function TwAuras:SetConfigMinimized(flag)
     if frame.rightBackground then
       frame.rightBackground:Hide()
     end
-    if frame.title then frame.title:Hide() end
+    if frame.title then
+      if frame.title.SetText then
+        frame.title:SetText("TwAuras Config (Minimized)")
+      end
+      if frame.title.Show then
+        frame.title:Show()
+      end
+    end
     if frame.editorTitle then frame.editorTitle:Hide() end
     if frame.summaryText then frame.summaryText:Hide() end
     if frame.liveUpdateCheck then frame.liveUpdateCheck:Hide() end
@@ -2580,6 +2646,24 @@ function TwAuras:SetConfigMinimized(flag)
       for key, panel in pairs(frame.tabs) do
         panel:Hide()
       end
+    end
+    if frame.tabButtons then
+      for i = 1, table.getn(frame.tabButtons) do
+        if frame.tabButtons[i] then
+          if frame.tabButtons[i].EnableMouse then frame.tabButtons[i]:EnableMouse(false) end
+          if frame.tabButtons[i].Hide then frame.tabButtons[i]:Hide() end
+        end
+      end
+    end
+    if frame.minimizeButton then
+      if frame.minimizeButton.SetText then frame.minimizeButton:SetText("[ ]") end
+      if frame.minimizeButton.ClearAllPoints then frame.minimizeButton:ClearAllPoints() end
+      if frame.minimizeButton.SetPoint then frame.minimizeButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -106, -6) end
+    end
+    if frame.closeButton then
+      if frame.closeButton.ClearAllPoints then frame.closeButton:ClearAllPoints() end
+      if frame.closeButton.SetPoint then frame.closeButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -18, -6) end
+      if frame.closeButton.Show then frame.closeButton:Show() end
     end
   else
     frame:SetWidth(960)
@@ -2601,7 +2685,14 @@ function TwAuras:SetConfigMinimized(flag)
     if frame.rightBackground then
       frame.rightBackground:Show()
     end
-    if frame.title then frame.title:Show() end
+    if frame.title then
+      if frame.title.SetText then
+        frame.title:SetText("TwAuras Config")
+      end
+      if frame.title.Show then
+        frame.title:Show()
+      end
+    end
     if frame.editorTitle then frame.editorTitle:Show() end
     if frame.summaryText then frame.summaryText:Show() end
     if frame.liveUpdateCheck then frame.liveUpdateCheck:Show() end
@@ -2614,14 +2705,37 @@ function TwAuras:SetConfigMinimized(flag)
         panel:Hide()
       end
     end
+    if frame.tabButtons then
+      for i = 1, table.getn(frame.tabButtons) do
+        if frame.tabButtons[i] then
+          if frame.tabButtons[i].EnableMouse then frame.tabButtons[i]:EnableMouse(true) end
+          if frame.tabButtons[i].Show then frame.tabButtons[i]:Show() end
+        end
+      end
+    end
+    if frame.minimizeButton then
+      if frame.minimizeButton.SetText then frame.minimizeButton:SetText("[ _ ]") end
+      if frame.minimizeButton.ClearAllPoints then frame.minimizeButton:ClearAllPoints() end
+      if frame.minimizeButton.SetPoint then frame.minimizeButton:SetPoint("TOPLEFT", frame, "TOPLEFT", frame.__minimizeButtonNormalX or 0, -8) end
+    end
+    if frame.closeButton then
+      if frame.closeButton.ClearAllPoints then frame.closeButton:ClearAllPoints() end
+      if frame.closeButton.SetPoint then frame.closeButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -18, -6) end
+      if frame.closeButton.Show then frame.closeButton:Show() end
+    end
     self:ShowConfigTab(frame.currentTab or "display")
   end
 
   if frame.tabButtons then
     for i = 1, table.getn(frame.tabButtons) do
       if frame.tabButtons[i] then
-        frame.tabButtons[i]:EnableMouse(true)
-        frame.tabButtons[i]:Show()
+        if frame.minimized then
+          if frame.tabButtons[i].EnableMouse then frame.tabButtons[i]:EnableMouse(false) end
+          if frame.tabButtons[i].Hide then frame.tabButtons[i]:Hide() end
+        else
+          if frame.tabButtons[i].EnableMouse then frame.tabButtons[i]:EnableMouse(true) end
+          if frame.tabButtons[i].Show then frame.tabButtons[i]:Show() end
+        end
       end
     end
   end
