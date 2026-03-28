@@ -1014,6 +1014,45 @@ function TwAuras:GetDescriptorGroupHeight(definition, rowHeight)
   return math.max(1, rows * rowHeight)
 end
 
+function TwAuras:RefreshRegionFieldScroll()
+  local frame = self.configFrame
+  local scrollFrame
+  local scrollBar
+  local contentHeight
+  local viewportHeight
+  local maxScroll
+  local scrollValue
+  if not frame or not frame.regionFieldScroll or not frame.regionFieldContent then
+    return
+  end
+
+  scrollFrame = frame.regionFieldScroll
+  scrollBar = frame.regionFieldScrollBar or getglobal("TwAurasRegionFieldScrollScrollBar")
+  frame.regionFieldScrollBar = scrollBar
+  contentHeight = frame.regionFieldContent:GetHeight() or 0
+  viewportHeight = scrollFrame:GetHeight() or 0
+  maxScroll = math.max(0, contentHeight - viewportHeight)
+
+  scrollValue = scrollFrame:GetVerticalScroll() or 0
+  if scrollValue > maxScroll then
+    scrollValue = maxScroll
+  elseif scrollValue < 0 then
+    scrollValue = 0
+  end
+  scrollFrame:SetVerticalScroll(scrollValue)
+
+  if scrollBar and scrollBar.SetMinMaxValues then
+    scrollBar:SetMinMaxValues(0, maxScroll)
+    scrollBar:SetValueStep(24)
+    scrollBar:SetValue(scrollValue)
+    if maxScroll > 0 then
+      scrollBar:Show()
+    else
+      scrollBar:Hide()
+    end
+  end
+end
+
 -- Picker filters are split from picker construction so searches can rerender existing rows cheaply.
 function TwAuras:RefreshIconPickerFilter()
   -- Icon filtering now uses a scrolling grid so all matches stay reachable without paging.
@@ -1820,7 +1859,8 @@ function TwAuras:RefreshEditorFields()
   frame.regionDescriptorTitle:SetText((regionDefinition and regionDefinition.displayName or "Region") .. " Fields")
   frame.regionDescriptorHelp:SetText("Tokens: %name %label %time %value %max %percent %stacks %realhp %realmaxhp %realhpdeficit %realmana %realmaxmana %realmanadeficit")
   frame.regionFieldContent:SetHeight(self:GetDescriptorGroupHeight(regionDefinition, 62))
-  frame.regionFieldWidgets = self:EnsureDescriptorFieldGroup("regionField", frame.regionFieldContent, "Region", regionDefinition, 0, 0, 230, 62)
+  frame.regionFieldWidgets = self:EnsureDescriptorFieldGroup("regionField", frame.regionFieldContent, "Region", regionDefinition, 8, 0, 230, 62)
+  self:RefreshRegionFieldScroll()
   local _, regionWidget
   for _, regionWidget in pairs(frame.regionFieldWidgets or {}) do
     self:SetDescriptorWidgetValue(regionWidget, aura.display[regionWidget.field.key])
@@ -1938,7 +1978,8 @@ function TwAuras:ApplyEditorToSelectedAura(isLive)
   aura.regionType = SafeLower(frame.regionTypeBox.__value or "icon")
   local regionDefinition = self:GetRegionType(aura.regionType) or self:GetRegionType("icon")
   frame.regionFieldContent:SetHeight(self:GetDescriptorGroupHeight(regionDefinition, 62))
-  local regionWidgets = self:EnsureDescriptorFieldGroup("regionField", frame.regionFieldContent, "Region", regionDefinition, 0, 0, 230, 62)
+  local regionWidgets = self:EnsureDescriptorFieldGroup("regionField", frame.regionFieldContent, "Region", regionDefinition, 8, 0, 230, 62)
+  self:RefreshRegionFieldScroll()
   local _, regionWidget
   for _, regionWidget in pairs(regionWidgets or {}) do
     aura.display[regionWidget.field.key] = self:GetDescriptorWidgetValue(regionWidget)
@@ -2335,17 +2376,41 @@ function TwAuras:BuildConfigFrame()
   frame.regionDescriptorHelp:SetWidth(544)
   frame.regionDescriptorHelp:SetJustifyH("LEFT")
   frame.regionFieldPanel = CreateFrame("Frame", nil, displayTab)
-  frame.regionFieldPanel:SetWidth(644)
+  frame.regionFieldPanel:SetWidth(620)
   frame.regionFieldPanel:SetHeight(260)
   frame.regionFieldPanel:SetPoint("TOPLEFT", displayTab, "TOPLEFT", 8, -106)
   frame.regionFieldScroll = CreateFrame("ScrollFrame", "TwAurasRegionFieldScroll", frame.regionFieldPanel, "UIPanelScrollFrameTemplate")
-  frame.regionFieldScroll:SetWidth(640)
+  frame.regionFieldScroll:SetWidth(596)
   frame.regionFieldScroll:SetHeight(260)
   frame.regionFieldScroll:SetPoint("TOPLEFT", frame.regionFieldPanel, "TOPLEFT", 0, 0)
   frame.regionFieldContent = CreateFrame("Frame", nil, frame.regionFieldScroll)
-  frame.regionFieldContent:SetWidth(620)
+  frame.regionFieldContent:SetWidth(574)
   frame.regionFieldContent:SetHeight(1)
   frame.regionFieldScroll:SetScrollChild(frame.regionFieldContent)
+  frame.regionFieldScrollBar = getglobal("TwAurasRegionFieldScrollScrollBar")
+  if frame.regionFieldScrollBar then
+    frame.regionFieldScrollBar:SetScript("OnValueChanged", function()
+      if TwAuras and TwAuras.configFrame and TwAuras.configFrame.regionFieldScroll then
+        TwAuras.configFrame.regionFieldScroll:SetVerticalScroll(this:GetValue() or 0)
+      end
+    end)
+  end
+  frame.regionFieldScroll:EnableMouseWheel(true)
+  frame.regionFieldScroll:SetScript("OnMouseWheel", function()
+    local step = 24
+    local content = TwAuras and TwAuras.configFrame and TwAuras.configFrame.regionFieldContent
+    local maxScroll = math.max(0, (content and content:GetHeight() or 0) - (this:GetHeight() or 0))
+    local newValue = (this:GetVerticalScroll() or 0) - ((arg1 or 0) * step)
+    if newValue < 0 then
+      newValue = 0
+    elseif newValue > maxScroll then
+      newValue = maxScroll
+    end
+    this:SetVerticalScroll(newValue)
+    if TwAuras and TwAuras.configFrame and TwAuras.configFrame.regionFieldScrollBar then
+      TwAuras.configFrame.regionFieldScrollBar:SetValue(newValue)
+    end
+  end)
   frame.iconPickerButton = MakeButton(displayTab, "Pick Icon", 90, 20, 420, -36, function() TwAuras:OpenIconPicker() end)
   frame.alphaSlider = MakeSlider(displayTab, "TwAurasAlphaSlider", 0, 1, 0.05, 8, -376, 220)
   frame.alphaSlider:SetScript("OnValueChanged", function()
@@ -2589,6 +2654,9 @@ function TwAuras:ShowConfigTab(tabName)
     else
       if key == tabName then panel:Show() else panel:Hide() end
     end
+  end
+  if tabName == "display" then
+    self:RefreshRegionFieldScroll()
   end
 end
 
